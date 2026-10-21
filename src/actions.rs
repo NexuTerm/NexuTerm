@@ -1,0 +1,377 @@
+use super::*;
+
+pub(crate) fn icon_button(icon: &str, label: &str) -> gtk::Button {
+    let button = gtk::Button::from_icon_name(icon);
+    button.set_tooltip_text(Some(label));
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
+    button.add_css_class("flat");
+    button
+}
+
+fn active_session(state: &State) -> Option<Rc<Session>> {
+    let page = state.notebook.selected_page()?.child();
+    let focused = state.focused_terminal.borrow().upgrade();
+    let sessions = state.sessions.borrow();
+    let eligible: Vec<_> = sessions
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|s| s.terminal.upgrade().is_some_and(|t| t.is_ancestor(&page)))
+        .collect();
+    eligible
+        .iter()
+        .find(|s| {
+            s.terminal
+                .upgrade()
+                .is_some_and(|t| t.has_focus() || focused.as_ref() == Some(&t))
+        })
+        .cloned()
+        .or_else(|| eligible.first().cloned())
+}
+
+pub(super) fn install_actions(
+    state: &Rc<State>,
+    window: &gtk::ApplicationWindow,
+    app: &gtk::Application,
+    sidebar: &gtk::Box,
+    menu_button: &gtk::MenuButton,
+) {
+    let menu = gio::Menu::new();
+    for (title, entries) in [
+        (
+            "Conexiones",
+            vec![
+                ("Administrar sesiones…", "sessions"),
+                ("Nueva conexión", "new-connection"),
+                ("Terminal local", "new-terminal"),
+            ],
+        ),
+        (
+            "Terminal",
+            vec![
+                ("Buscar…", "search"),
+                ("Dividir en columnas", "split-horizontal"),
+                ("Dividir en filas", "split-vertical"),
+                ("Reconectar", "reconnect"),
+                ("Desconectar", "disconnect"),
+                ("Mostrar archivos remotos", "remote-files"),
+                ("Aumentar texto", "zoom-in"),
+                ("Reducir texto", "zoom-out"),
+            ],
+        ),
+        (
+            "Vista y herramientas",
+            vec![
+                ("Mostrar conexiones", "sidebar"),
+                ("Abrir archivo…", "open-file"),
+                ("Preferencias…", "preferences"),
+                ("Acerca de NexuTerm", "about"),
+            ],
+        ),
+    ] {
+        let section = gio::Menu::new();
+        for (label, action) in entries {
+            section.append(Some(label), Some(&format!("win.{action}")));
+        }
+        menu.append_section(Some(title), &section);
+    }
+    menu_button.set_menu_model(Some(&menu));
+    sidebar.set_visible(state.config.borrow().preferences.sidebar_visible);
+    apply_theme(&state.config.borrow().preferences.theme);
+    for name in [
+        "sessions",
+        "new-connection",
+        "new-terminal",
+        "open-file",
+        "remote-files",
+        "search",
+        "split-horizontal",
+        "split-vertical",
+        "reconnect",
+        "disconnect",
+        "zoom-in",
+        "zoom-out",
+        "sidebar",
+        "preferences",
+        "about",
+    ] {
+        let action = gio::SimpleAction::new(name, None);
+        let s = Rc::downgrade(state);
+        let w = window.downgrade();
+        let side = sidebar.downgrade();
+        action.connect_activate(move |_, _| {
+            let (Some(s), Some(w)) = (s.upgrade(), w.upgrade()) else {
+                return;
+            };
+            match name {
+                "sessions" => sessions::show(&s, &w),
+                "new-connection" => profile_dialog(&s, &w, None),
+                "new-terminal" => local_terminal(&s),
+                "open-file" => crate::files::choose_editor(&s, &w),
+                "remote-files" => {
+                    if let Some(page) = s.notebook.selected_page()
+                        && let Ok(paned) = page.child().downcast::<gtk::Paned>()
+                        && let Some(panel) = paned.start_child()
+                    {
+                        panel.set_visible(!panel.is_visible());
+                    }
+                }
+                "preferences" => preferences(&s, &w),
+                "about" => {
+                    let d = gtk::AboutDialog::builder()
+                        .transient_for(&w)
+                        .modal(true)
+                        .program_name("NexuTerm")
+                        .version("0.2.0 · en desarrollo")
+                        .comments("Terminal y conexiones remotas para Linux")
+                        .logo_icon_name("utilities-terminal")
+                        .build();
+                    d.present();
+                }
+                "sidebar" => {
+                    if let Some(side) = side.upgrade() {
+                        side.set_visible(!side.is_visible());
+                    }
+                }
+                _ => {
+                    if let Some(session) = active_session(&s) {
+                        let Some(t) = session.terminal.upgrade() else {
+                            return;
+                        };
+                        match name {
+                            "search" => terminal_search(&t, &w),
+                            "zoom-in" => t.set_font_scale((t.font_scale() + 0.1).min(3.0)),
+                            "zoom-out" => t.set_font_scale((t.font_scale() - 0.1).max(0.5)),
+                            "disconnect" => session.stop(),
+                            "split-horizontal" | "split-vertical" => {
+                                let Some(parent) = t.parent().and_downcast::<gtk::Box>() else {
+                                    return;
+                                };
+                                let old = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                                while let Some(child) = parent.first_child() {
+                                    parent.remove(&child);
+                                    old.append(&child);
+                                }
+                                let new = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                                let orientation = if name == "split-horizontal" {
+                                    gtk::Orientation::Horizontal
+                                } else {
+                                    gtk::Orientation::Vertical
+                                };
+                                let paned = gtk::Paned::new(orientation);
+                                paned.set_hexpand(true);
+                                paned.set_vexpand(true);
+                                paned.set_start_child(Some(&old));
+                                paned.set_end_child(Some(&new));
+                                paned.set_position(
+                                    if orientation == gtk::Orientation::Horizontal {
+                                        parent.width().max(400) / 2
+                                    } else {
+                                        parent.height().max(240) / 2
+                                    },
+                                );
+                                parent.append(&paned);
+                                terminal_in(
+                                    &s,
+                                    "Terminal",
+                                    session.spec.clone(),
+                                    Some(&new),
+                                    session.connection.clone(),
+                                );
+                            }
+                            "reconnect" => {
+                                session.stop();
+                                if let Some(parent) = t.parent().and_downcast::<gtk::Box>() {
+                                    while let Some(child) = parent.first_child() {
+                                        parent.remove(&child);
+                                    }
+                                    terminal_in(
+                                        &s,
+                                        "Terminal",
+                                        session.spec.clone(),
+                                        Some(&parent),
+                                        session.connection.clone(),
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        });
+        window.add_action(&action);
+    }
+    let weak = window.downgrade();
+    let s = Rc::downgrade(state);
+    let update = move || {
+        if let (Some(w), Some(s)) = (weak.upgrade(), s.upgrade()) {
+            let terminal = active_session(&s).is_some();
+            if let Some(a) = w
+                .lookup_action("remote-files")
+                .and_downcast::<gio::SimpleAction>()
+            {
+                a.set_enabled(
+                    active_session(&s).is_some_and(|session| session.connection.is_some()),
+                );
+            }
+            for name in [
+                "search",
+                "split-horizontal",
+                "split-vertical",
+                "reconnect",
+                "disconnect",
+                "zoom-in",
+                "zoom-out",
+            ] {
+                if let Some(a) = w.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                    a.set_enabled(terminal);
+                }
+            }
+        }
+    };
+    update();
+    state
+        .notebook
+        .connect_selected_page_notify(move |_| update());
+    for (action, keys) in [
+        ("sessions", vec!["<Primary><Shift>s"]),
+        ("new-terminal", vec!["<Primary><Shift>t"]),
+        ("new-connection", vec!["<Primary>n"]),
+        ("open-file", vec!["<Primary>o"]),
+        ("search", vec!["<Primary><Shift>f"]),
+        ("sidebar", vec!["F9"]),
+    ] {
+        app.set_accels_for_action(&format!("win.{action}"), &keys);
+    }
+}
+
+fn terminal_search(term: &vte4::Terminal, window: &gtk::ApplicationWindow) {
+    let dialog = gtk::Window::builder()
+        .transient_for(window)
+        .modal(true)
+        .title("Buscar en la terminal")
+        .default_width(430)
+        .build();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.set_margin_top(16);
+    row.set_margin_bottom(16);
+    row.set_margin_start(16);
+    row.set_margin_end(16);
+    let entry = gtk::SearchEntry::new();
+    entry.set_hexpand(true);
+    row.append(&entry);
+    let next = icon_button("go-down-symbolic", "Siguiente coincidencia");
+    row.append(&next);
+    let t = term.downgrade();
+    let e = entry.clone();
+    next.connect_clicked(move |_| {
+        if let Some(t) = t.upgrade() {
+            let pattern = glib::Regex::escape_string(e.text());
+            if let Ok(regex) = vte4::Regex::for_search(&pattern, 0x00000400) {
+                t.search_set_regex(Some(&regex), 0);
+                t.search_set_wrap_around(true);
+                t.search_find_next();
+            }
+        }
+    });
+    let n = next.clone();
+    entry.connect_activate(move |_| n.emit_clicked());
+    dialog.set_child(Some(&row));
+    dialog.present();
+    entry.grab_focus();
+}
+
+fn apply_theme(theme: &str) {
+    adw::StyleManager::default().set_color_scheme(match theme {
+        "dark" => adw::ColorScheme::ForceDark,
+        "light" => adw::ColorScheme::ForceLight,
+        _ => adw::ColorScheme::Default,
+    });
+}
+
+fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
+    let current = state.config.borrow().preferences.clone();
+    let dialog = gtk::Window::builder()
+        .transient_for(window)
+        .modal(true)
+        .title("Preferencias")
+        .default_width(480)
+        .build();
+    let grid = gtk::Grid::builder()
+        .row_spacing(12)
+        .column_spacing(16)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .build();
+    let theme = gtk::DropDown::from_strings(&["Sistema", "Claro", "Oscuro"]);
+    theme.set_selected(match current.theme.as_str() {
+        "light" => 1,
+        "dark" => 2,
+        _ => 0,
+    });
+    grid.attach(&gtk::Label::new(Some("Apariencia")), 0, 0, 1, 1);
+    grid.attach(&theme, 1, 0, 1, 1);
+    let font = entry(&grid, 1, "Fuente de terminal", &current.font);
+    let lines = entry(
+        &grid,
+        2,
+        "Líneas de historial",
+        &current.scrollback.to_string(),
+    );
+    let side = gtk::CheckButton::with_label("Mostrar conexiones al iniciar");
+    side.set_active(current.sidebar_visible);
+    grid.attach(&side, 0, 3, 2, 1);
+    let error = gtk::Label::new(None);
+    error.set_wrap(true);
+    grid.attach(&error, 0, 4, 2, 1);
+    let save = gtk::Button::with_label("Guardar");
+    save.add_css_class("suggested-action");
+    save.set_sensitive(state.config_writable);
+    grid.attach(&save, 1, 5, 1, 1);
+    let s = Rc::downgrade(state);
+    let d = dialog.downgrade();
+    save.connect_clicked(move |_| {
+        let Some(s) = s.upgrade() else {
+            return;
+        };
+        let Ok(scrollback) = lines.text().parse::<u32>() else {
+            error.set_text("El historial debe ser un número entero.");
+            return;
+        };
+        if scrollback > 1_000_000 || font.text().trim().is_empty() {
+            error.set_text("Indica una fuente y un historial de hasta 1.000.000 líneas.");
+            return;
+        }
+        let mut config = s.config.borrow().clone();
+        config.preferences.theme = match theme.selected() {
+            1 => "light",
+            2 => "dark",
+            _ => "system",
+        }
+        .into();
+        config.preferences.font = font.text().trim().into();
+        config.preferences.scrollback = scrollback;
+        config.preferences.sidebar_visible = side.is_active();
+        if let Err(e) = config::save(&s.path, &config) {
+            error.set_text(&e);
+            return;
+        }
+        apply_theme(&config.preferences.theme);
+        for session in s.sessions.borrow().iter().filter_map(Weak::upgrade) {
+            if let Some(t) = session.terminal.upgrade() {
+                t.set_font(Some(&gtk::pango::FontDescription::from_string(
+                    &config.preferences.font,
+                )));
+                t.set_scrollback_lines(scrollback.into());
+            }
+        }
+        *s.config.borrow_mut() = config;
+        if let Some(d) = d.upgrade() {
+            d.close();
+        }
+    });
+    dialog.set_child(Some(&grid));
+    dialog.present();
+}

@@ -1,0 +1,6 @@
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server xrdp tigervnc-standalone-server tigervnc-tools xterm fluxbox dbus-x11 openssl procps iproute2 python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash tester && mkdir -p /run/sshd && printf 'exec fluxbox\n' > /home/tester/.xsession && chown tester:tester /home/tester/.xsession
+COPY start.sh /usr/local/bin/nexuterm-lab
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/nexuterm-lab"]

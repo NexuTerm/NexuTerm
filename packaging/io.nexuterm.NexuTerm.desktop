@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NexuTerm
+Comment=Terminal y conexiones remotas SSH, SFTP, RDP y VNC
+Exec=nexuterm
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;Network;RemoteAccess;
+StartupNotify=true
