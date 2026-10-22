@@ -1,5 +1,38 @@
 # Validación de NexuTerm
 
+## Menús e identidad gráfica — 22 de octubre de 2026
+
+Entorno de esta revisión: Ubuntu 26.04.1, Rust 1.92.0, GTK 4.22.4,
+libadwaita 1.9.1 y VTE 0.84.0. Rust y Xvfb se prepararon temporalmente
+en `/tmp`, sin modificar el perfil del usuario ni instalar paquetes globales.
+
+- `cargo build --locked`: correcto.
+- `cargo test --locked`: 14 pruebas correctas; la integración SFTP se mantiene
+  ignorada por defecto porque requiere el laboratorio remoto propio.
+- `cargo fmt --all -- --check`: correcto.
+- `cargo clippy --locked --all-targets -- -D warnings`: correcto.
+- `python3 lab/check_ui.py menus`: correcto; dos ciclos de preferencias,
+  acerca de, nueva conexión, búsqueda y gestor de sesiones. Comprueba que cada
+  diálogo se abre, que el desplegable se cierra y que GTK encuentra el logo integrado.
+- `python3 lab/check_ui.py menus --compact --scale 2`: correcto a 1024×768
+  lógicos y escala 200 %; captura revisada.
+- `python3 lab/check_ui.py sessions`: correcto, incluidos crear, editar,
+  duplicar, eliminar y comprobar la persistencia con configuración temporal.
+- `python3 lab/check_ui.py splits`: correcto; tres terminales, zoom y lateral.
+- `python3 lab/check_ui.py close-splits`: correcto; cierre mediante la **×**
+  de divisiones anidadas, reducción de tres paneles a uno y cierre de la rama
+  original conservando la nueva. Comprueba cancelación de la sesión cerrada,
+  permanencia de la pestaña y desaparición del botón al quedar una sola terminal.
+- Recurso gráfico compilado, logo instalado idéntico al original y lanzador
+  validado con `desktop-file-validate`. Instalación comprobada con `DESTDIR`
+  temporal y binario de desarrollo; no se realizó una instalación global.
+
+La prueba de argumentos RDP/VNC simula únicamente la búsqueda del ejecutable;
+conserva las aserciones de puertos y seguridad, y comprueba el error si falta el cliente.
+No equivale a conectar con un servidor RDP/VNC. Las pruebas gráficas usan Xvfb;
+no validan Wayland nativo ni todos los portales de archivos. Se observan avisos
+del entorno sobre EGL y portales, sin fallos en los escenarios comprobados.
+
 ## Mantenimiento de sesiones y navegador SSH integrado
 
 Comprobado el 21 de octubre de 2026, con el mismo entorno WSL de abajo:
