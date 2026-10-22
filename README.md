@@ -30,7 +30,7 @@ Debian/Ubuntu (paquetes de desarrollo para compilar):
 
 ```bash
 sudo apt update
-sudo apt install build-essential pkg-config libgtk-4-dev libvte-2.91-gtk4-dev \
+sudo apt install build-essential pkg-config libglib2.0-dev-bin libgtk-4-dev libvte-2.91-gtk4-dev \
     libadwaita-1-dev libvncserver-dev libsecret-1-dev libssl-dev \
     openssh-client gvfs-backends dbus-user-session freerdp3-x11 tigervnc-viewer
 ```
@@ -46,6 +46,19 @@ cd ~/source/NexuTerm
 
 Rust se instaló a nivel de usuario sin modificar el PATH del shell. Si `cargo` ya está en tu PATH, puedes usarlo directamente.
 Para otras máquinas, instala Rust desde [rust-lang.org](https://rust-lang.org/tools/install/).
+
+### Instalación en el escritorio Linux
+
+```bash
+make build
+sudo make install
+```
+
+Instala el binario, el lanzador del menú de aplicaciones y el logo de `logo/NexuTerm.png`
+en `/usr/local`. El logo también queda integrado en el ejecutable y en **Acerca de NexuTerm**.
+Para una instalación sin privilegios usa `make install PREFIX="$HOME/.local"`
+(incluye `~/.local/bin` en tu PATH). Para preparar un paquete, usa `DESTDIR`.
+La instalación registra el lanzador en el menú; no copia accesos directos al escritorio personal.
 
 ## Uso
 

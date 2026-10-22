@@ -123,7 +123,7 @@ pub(super) fn install_actions(
                         .program_name("NexuTerm")
                         .version("0.2.0 · en desarrollo")
                         .comments("Terminal y conexiones remotas para Linux")
-                        .logo_icon_name("utilities-terminal")
+                        .logo_icon_name("io.nexuterm.NexuTerm")
                         .build();
                     d.present();
                 }

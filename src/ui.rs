@@ -63,6 +63,10 @@ pub fn build(app: &gtk::Application) {
         return;
     }
     adw::init().expect("No se pudo iniciar libadwaita");
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_resource_path("/io/nexuterm/NexuTerm/icons");
+    }
+    gtk::Window::set_default_icon_name("io.nexuterm.NexuTerm");
     let path = match config::config_path() {
         Ok(p) => p,
         Err(e) => {
@@ -84,6 +88,13 @@ pub fn build(app: &gtk::Application) {
     let header = adw::HeaderBar::new();
     let brand = adw::WindowTitle::new("NexuTerm", "Terminal y conexiones remotas");
     header.set_title_widget(Some(&brand));
+    let logo = gtk::Image::from_resource("/io/nexuterm/NexuTerm/icons/nexuterm-toolbar.png");
+    logo.set_pixel_size(44);
+    logo.set_margin_top(0);
+    logo.set_margin_bottom(0);
+    logo.set_margin_end(10);
+    logo.set_can_target(false);
+    header.pack_start(&logo);
     let new_terminal = icon_button(
         "utilities-terminal-symbolic",
         "Terminal local · Ctrl+Mayús+T",
