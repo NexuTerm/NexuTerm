@@ -313,7 +313,46 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
     });
     grid.attach(&gtk::Label::new(Some("Apariencia")), 0, 0, 1, 1);
     grid.attach(&theme, 1, 0, 1, 1);
-    let font = entry(&grid, 1, "Fuente de terminal", &current.font);
+    let font_description = gtk::pango::FontDescription::from_string(&current.font);
+    let current_family = font_description
+        .family()
+        .map(|family| family.to_string())
+        .unwrap_or_else(|| "Monospace".into());
+    let mut families: Vec<String> = window
+        .pango_context()
+        .list_families()
+        .iter()
+        .map(|family| family.name().to_string())
+        .collect();
+    if !families.contains(&current_family) {
+        families.push(current_family.clone());
+    }
+    families.sort_by_cached_key(|family| family.to_lowercase());
+    families.dedup();
+    let family_names: Vec<&str> = families.iter().map(String::as_str).collect();
+    let font = gtk::DropDown::from_strings(&family_names);
+    font.set_enable_search(true);
+    font.set_hexpand(true);
+    font.set_selected(
+        families
+            .iter()
+            .position(|name| name == &current_family)
+            .unwrap() as u32,
+    );
+    let size = gtk::SpinButton::with_range(1.0, 512.0, 0.5);
+    size.set_digits(1);
+    let current_size = f64::from(font_description.size()) / f64::from(gtk::pango::SCALE);
+    size.set_value(if current_size > 0.0 {
+        current_size
+    } else {
+        11.0
+    });
+    size.set_tooltip_text(Some("Tamaño de la fuente"));
+    let font_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    font_row.append(&font);
+    font_row.append(&size);
+    grid.attach(&gtk::Label::new(Some("Fuente de terminal")), 0, 1, 1, 1);
+    grid.attach(&font_row, 1, 1, 1, 1);
     let lines = entry(
         &grid,
         2,
@@ -340,8 +379,8 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             error.set_text("El historial debe ser un número entero.");
             return;
         };
-        if scrollback > 1_000_000 || font.text().trim().is_empty() {
-            error.set_text("Indica una fuente y un historial de hasta 1.000.000 líneas.");
+        if scrollback > 1_000_000 {
+            error.set_text("Indica un historial de hasta 1.000.000 líneas.");
             return;
         }
         let mut config = s.config.borrow().clone();
@@ -351,7 +390,19 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             _ => "system",
         }
         .into();
-        config.preferences.font = font.text().trim().into();
+        let Some(family) = families.get(font.selected() as usize) else {
+            error.set_text("Selecciona una fuente de terminal.");
+            return;
+        };
+        let mut selected_font = font_description.clone();
+        selected_font.set_family(family);
+        let scaled_size = size.value() * f64::from(gtk::pango::SCALE);
+        if selected_font.is_size_absolute() {
+            selected_font.set_absolute_size(scaled_size);
+        } else {
+            selected_font.set_size(scaled_size.round() as i32);
+        }
+        config.preferences.font = selected_font.to_string();
         config.preferences.scrollback = scrollback;
         config.preferences.sidebar_visible = side.is_active();
         if let Err(e) = config::save(&s.path, &config) {
