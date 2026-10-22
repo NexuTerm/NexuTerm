@@ -98,10 +98,16 @@ pub(super) fn install_actions(
         let s = Rc::downgrade(state);
         let w = window.downgrade();
         let side = sidebar.downgrade();
+        let menu = menu_button.downgrade();
         action.connect_activate(move |_, _| {
             let (Some(s), Some(w)) = (s.upgrade(), w.upgrade()) else {
                 return;
             };
+            // Release the popover's input grab before presenting modal windows
+            // or removing/reparenting the focused terminal.
+            if let Some(menu) = menu.upgrade() {
+                menu.popdown();
+            }
             match name {
                 "sessions" => sessions::show(&s, &w),
                 "new-connection" => profile_dialog(&s, &w, None),
@@ -120,6 +126,7 @@ pub(super) fn install_actions(
                     let d = gtk::AboutDialog::builder()
                         .transient_for(&w)
                         .modal(true)
+                        .destroy_with_parent(true)
                         .program_name("NexuTerm")
                         .version("0.2.0 · en desarrollo")
                         .comments("Terminal y conexiones remotas para Linux")
@@ -201,32 +208,10 @@ pub(super) fn install_actions(
         });
         window.add_action(&action);
     }
-    let weak = window.downgrade();
     let s = Rc::downgrade(state);
     let update = move || {
-        if let (Some(w), Some(s)) = (weak.upgrade(), s.upgrade()) {
-            let terminal = active_session(&s).is_some();
-            if let Some(a) = w
-                .lookup_action("remote-files")
-                .and_downcast::<gio::SimpleAction>()
-            {
-                a.set_enabled(
-                    active_session(&s).is_some_and(|session| session.connection.is_some()),
-                );
-            }
-            for name in [
-                "search",
-                "split-horizontal",
-                "split-vertical",
-                "reconnect",
-                "disconnect",
-                "zoom-in",
-                "zoom-out",
-            ] {
-                if let Some(a) = w.lookup_action(name).and_downcast::<gio::SimpleAction>() {
-                    a.set_enabled(terminal);
-                }
-            }
+        if let Some(s) = s.upgrade() {
+            update_actions(&s);
         }
     };
     update();
@@ -242,6 +227,32 @@ pub(super) fn install_actions(
         ("sidebar", vec!["F9"]),
     ] {
         app.set_accels_for_action(&format!("win.{action}"), &keys);
+    }
+}
+
+pub(super) fn update_actions(s: &State) {
+    if let Some(w) = s.window.upgrade() {
+        let session = active_session(s);
+        let terminal = session.is_some();
+        if let Some(a) = w
+            .lookup_action("remote-files")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            a.set_enabled(session.is_some_and(|session| session.connection.is_some()));
+        }
+        for name in [
+            "search",
+            "split-horizontal",
+            "split-vertical",
+            "reconnect",
+            "disconnect",
+            "zoom-in",
+            "zoom-out",
+        ] {
+            if let Some(a) = w.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                a.set_enabled(terminal);
+            }
+        }
     }
 }
 
@@ -279,6 +290,47 @@ fn terminal_search(term: &vte4::Terminal, window: &gtk::ApplicationWindow) {
     dialog.set_child(Some(&row));
     dialog.present();
     entry.grab_focus();
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_menus(window: &gtk::ApplicationWindow, menu: &gtk::MenuButton) {
+    let window = window.downgrade();
+    let menu = menu.downgrade();
+    glib::spawn_future_local(async move {
+        glib::timeout_future(std::time::Duration::from_millis(300)).await;
+        let (Some(window), Some(menu)) = (window.upgrade(), menu.upgrade()) else {
+            return;
+        };
+        let display = gtk::prelude::WidgetExt::display(&window);
+        assert!(gtk::IconTheme::for_display(&display).has_icon("io.nexuterm.NexuTerm"));
+        // Repeat opening/closing each dialog with the menu already holding focus.
+        for _ in 0..2 {
+            for action in [
+                "preferences",
+                "about",
+                "new-connection",
+                "search",
+                "sessions",
+            ] {
+                menu.popup();
+                glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                assert!(menu.popover().unwrap().is_visible());
+                gio::prelude::ActionGroupExt::activate_action(&window, action, None);
+                glib::timeout_future(std::time::Duration::from_millis(70)).await;
+                assert!(!menu.popover().unwrap().is_visible());
+                let dialogs: Vec<gtk::Window> = gtk::Window::list_toplevels()
+                    .into_iter()
+                    .filter_map(|w| w.downcast::<gtk::Window>().ok())
+                    .filter(|w| w.transient_for().as_ref() == Some(window.upcast_ref()))
+                    .collect();
+                assert_eq!(dialogs.len(), 1, "Falta el diálogo de {action}");
+                for dialog in dialogs {
+                    dialog.close();
+                }
+            }
+        }
+        eprintln!("NEXUTERM_SMOKE_MENUS_OK");
+    });
 }
 
 fn apply_theme(theme: &str) {

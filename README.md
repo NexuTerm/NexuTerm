@@ -91,7 +91,12 @@ El lateral de conexiones se oculta al abrir una sesión SSH para dejar espacio a
 cargo test --locked
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
+python3 lab/check_ui.py menus
 ```
+
+La prueba de menús requiere una compilación de desarrollo (`cargo build --locked`),
+Xvfb y D-Bus. Repite la apertura y cierre de los diálogos desde el menú y comprueba
+que el desplegable se oculta y que el logo está disponible con configuración aislada.
 
 Pruebas de biblioteca sin la interfaz GTK (el backend VNC requiere libvncclient):
 

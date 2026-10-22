@@ -349,6 +349,10 @@ pub fn build(app: &gtk::Application) {
     // Optional deterministic local UI smoke check, with no network or user-profile writes.
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some() {
         #[cfg(debug_assertions)]
+        if std::env::var_os("NEXUTERM_SMOKE_MENUS").is_some() {
+            actions::smoke_menus(&window, &menu_button);
+        }
+        #[cfg(debug_assertions)]
         if std::env::var_os("NEXUTERM_SMOKE_SESSION_CRUD").is_some() {
             let s = Rc::downgrade(&state);
             glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
@@ -480,6 +484,7 @@ fn terminal_in(
     focus.connect_enter(move |_| {
         if let Some(s) = s.upgrade() {
             *s.focused_terminal.borrow_mut() = t.clone();
+            actions::update_actions(&s);
         }
     });
     term.add_controller(focus);
@@ -579,6 +584,7 @@ fn terminal_in(
         },
     );
     term.grab_focus();
+    actions::update_actions(state);
 }
 
 fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: &Profile) {

@@ -12,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("scenario", choices=["sessions", "ssh", "splits"])
+    parser.add_argument("scenario", choices=["sessions", "ssh", "splits", "menus"])
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--scale", choices=[1, 2], default=1, type=int)
     args = parser.parse_args()
@@ -35,6 +35,9 @@ def main():
         if args.scenario == "sessions":
             env.update(NEXUTERM_SMOKE_SESSIONS="1", NEXUTERM_SMOKE_SESSION_CRUD="1")
             marker = "NEXUTERM_SMOKE_SESSIONS_OK"
+        elif args.scenario == "menus":
+            env["NEXUTERM_SMOKE_MENUS"] = "1"
+            marker = "NEXUTERM_SMOKE_MENUS_OK"
         elif args.scenario == "ssh":
             if not (ROOT / ".lab/known_hosts").exists():
                 raise SystemExit("Run lab/lab.py up and lab/lab.py trust first")
