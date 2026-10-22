@@ -64,6 +64,13 @@ pub fn find_program(names: &[&str]) -> Option<String> {
 }
 
 pub fn command(p: &Profile) -> Result<CommandSpec, String> {
+    command_with_lookup(p, find_program)
+}
+
+fn command_with_lookup(
+    p: &Profile,
+    lookup: impl FnOnce(&[&str]) -> Option<String>,
+) -> Result<CommandSpec, String> {
     validate(p)?;
     let ipv6_host = if p.host.contains(':') {
         format!("[{}]", p.host)
@@ -111,7 +118,7 @@ pub fn command(p: &Profile) -> Result<CommandSpec, String> {
             vec![format!("{ipv6_host}::{}", p.port)],
         ),
     };
-    let program = find_program(candidates).ok_or_else(|| {
+    let program = lookup(candidates).ok_or_else(|| {
         format!(
             "Falta el programa {}. Consulta README.md para instalarlo.",
             candidates.join(" / ")
@@ -183,7 +190,11 @@ mod tests {
         p.port = 3391;
         p.username = "testuser".into();
         p.domain = "LAB".into();
-        let command = command(&p).unwrap();
+        let command = command_with_lookup(&p, |candidates| {
+            assert_eq!(candidates, ["xfreerdp3", "xfreerdp"]);
+            Some("/test/xfreerdp3".into())
+        })
+        .unwrap();
         assert!(command.args.contains(&"/v:[::1]:3391".into()));
         assert!(command.args.contains(&"/u:testuser".into()));
         assert!(
@@ -194,7 +205,19 @@ mod tests {
         );
         p.protocol = Protocol::Vnc;
         p.port = 5907;
-        let vnc = super::command(&p).unwrap();
+        let vnc = command_with_lookup(&p, |candidates| {
+            assert_eq!(candidates, ["vncviewer", "xtigervncviewer"]);
+            Some("/test/vncviewer".into())
+        })
+        .unwrap();
         assert_eq!(vnc.args, vec!["[::1]::5907"]);
+    }
+
+    #[test]
+    fn missing_desktop_client_reports_candidates() {
+        let mut p = profile();
+        p.protocol = Protocol::Rdp;
+        let error = command_with_lookup(&p, |_| None).unwrap_err();
+        assert!(error.contains("xfreerdp3 / xfreerdp"));
     }
 }
