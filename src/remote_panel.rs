@@ -36,6 +36,8 @@ impl Panel {
         connection: Arc<SshConnection>,
     ) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        widget.add_css_class("nexuterm-section");
+        widget.add_css_class("nexuterm-panel");
         widget.set_width_request(240);
         for set in [
             gtk::Widget::set_margin_top,

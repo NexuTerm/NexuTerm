@@ -26,6 +26,7 @@ pub fn choose_editor(state: &Rc<State>, window: &gtk::ApplicationWindow) {
 
 pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::File) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    root.add_css_class("nexuterm-section");
     let save = gtk::Button::with_label("Guardar");
     save.set_sensitive(false);
     let status = gtk::Label::new(Some("Cargando texto UTF-8 (máximo 8 MiB)…"));

@@ -1,0 +1,46 @@
+.nexuterm-header {
+    min-height: 46px;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.nexuterm-tools {
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.nexuterm-section,
+.nexuterm-terminal {
+    border: 1px solid alpha(currentColor, 0.24);
+    border-radius: 10px;
+}
+
+.nexuterm-terminal {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.nexuterm-terminal scrollbar {
+    border: none;
+    box-shadow: none;
+}
+
+.nexuterm-panel {
+    padding: 8px;
+}
+
+.nexuterm-split > separator {
+    background: none;
+    border: none;
+    box-shadow: none;
+}
+
+.nexuterm-workspace {
+    padding: 1px;
+}
+
+.nexuterm-workspace tabbar {
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    box-shadow: none;
+}

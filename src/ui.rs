@@ -65,6 +65,13 @@ pub fn build(app: &gtk::Application) {
     adw::init().expect("No se pudo iniciar libadwaita");
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::IconTheme::for_display(&display).add_resource_path("/io/nexuterm/NexuTerm/icons");
+        let css = gtk::CssProvider::new();
+        css.load_from_data(include_str!("style.css"));
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
     }
     gtk::Window::set_default_icon_name("io.nexuterm.NexuTerm");
     let path = match config::config_path() {
@@ -86,6 +93,7 @@ pub fn build(app: &gtk::Application) {
     let window: gtk::ApplicationWindow = adw_window.clone().upcast();
     let root = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
+    header.add_css_class("nexuterm-header");
     let brand = adw::WindowTitle::new("NexuTerm", "Terminal y conexiones remotas");
     header.set_title_widget(Some(&brand));
     let logo = gtk::Image::from_resource("/io/nexuterm/NexuTerm/icons/nexuterm-toolbar.png");
@@ -124,9 +132,10 @@ pub fn build(app: &gtk::Application) {
     let context = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     context.set_margin_start(12);
     context.set_margin_end(12);
-    context.set_margin_top(4);
-    context.set_margin_bottom(4);
+    context.set_margin_top(0);
+    context.set_margin_bottom(0);
     context.add_css_class("toolbar");
+    context.add_css_class("nexuterm-tools");
     for (icon, label, action) in [
         (
             "view-dual-symbolic",
@@ -152,13 +161,17 @@ pub fn build(app: &gtk::Application) {
     }
     root.add_top_bar(&context);
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
+    split.add_css_class("nexuterm-split");
     split.set_vexpand(true);
     split.set_position(300);
     split.set_shrink_start_child(false);
     let side = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    side.add_css_class("nexuterm-section");
+    side.add_css_class("nexuterm-panel");
     side.set_margin_start(12);
     side.set_margin_end(12);
-    side.set_margin_top(12);
+    side.set_margin_top(2);
+    side.set_margin_bottom(8);
     side.set_width_request(220);
     let title = gtk::Label::new(Some("CONEXIONES GUARDADAS"));
     title.set_xalign(0.0);
@@ -186,6 +199,13 @@ pub fn build(app: &gtk::Application) {
         .autohide(false)
         .build();
     let workspace = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    workspace.add_css_class("nexuterm-section");
+    workspace.add_css_class("nexuterm-workspace");
+    workspace.set_overflow(gtk::Overflow::Hidden);
+    tabbar.set_overflow(gtk::Overflow::Hidden);
+    workspace.set_margin_top(2);
+    workspace.set_margin_end(12);
+    workspace.set_margin_bottom(8);
     workspace.append(&tabbar);
     workspace.append(&notebook);
     notebook.set_hexpand(true);
@@ -475,6 +495,7 @@ fn terminal_in(
     connection: Option<std::sync::Arc<nexuterm::ssh::SshConnection>>,
 ) {
     let term = vte4::Terminal::new();
+    term.set_color_background(&gtk::gdk::RGBA::new(0.12, 0.12, 0.12, 1.0));
     term.set_scrollback_lines(state.config.borrow().preferences.scrollback.into());
     term.set_hexpand(true);
     term.set_vexpand(true);
@@ -511,6 +532,8 @@ fn terminal_in(
     });
     term.add_controller(keys);
     let page = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    page.add_css_class("nexuterm-terminal");
+    page.set_overflow(gtk::Overflow::Hidden);
     page.append(&term);
     let scrollbar = gtk::Scrollbar::new(gtk::Orientation::Vertical, term.vadjustment().as_ref());
     page.append(&scrollbar);
