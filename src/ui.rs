@@ -31,6 +31,7 @@ pub struct State {
 struct Session {
     pid: Cell<Option<i32>>,
     terminal: glib::WeakRef<vte4::Terminal>,
+    close_button: glib::WeakRef<gtk::Button>,
     spec: connection::CommandSpec,
     connection: Option<std::sync::Arc<nexuterm::ssh::SshConnection>>,
     cancelled: Cell<bool>,
@@ -401,6 +402,10 @@ pub fn build(app: &gtk::Application) {
                     }
                     let count = s.sessions.borrow().iter().filter_map(Weak::upgrade).count();
                     assert_eq!(count, 3, "Las divisiones deben crear tres terminales");
+                    #[cfg(debug_assertions)]
+                    if std::env::var_os("NEXUTERM_SMOKE_CLOSE_SPLITS").is_some() {
+                        actions::smoke_close_splits(&s, &w);
+                    }
                     eprintln!("NEXUTERM_SMOKE_ACTIONS_OK terminals={count}");
                 }
             });
@@ -536,14 +541,28 @@ fn terminal_in(
     page.set_overflow(gtk::Overflow::Hidden);
     page.append(&term);
     let scrollbar = gtk::Scrollbar::new(gtk::Orientation::Vertical, term.vadjustment().as_ref());
-    page.append(&scrollbar);
+    let controls = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let close = icon_button("window-close-symbolic", "Cerrar esta división");
+    close.set_visible(false);
+    controls.append(&close);
+    scrollbar.set_vexpand(true);
+    controls.append(&scrollbar);
+    page.append(&controls);
     let handle = Rc::new(Session {
         terminal: term.downgrade(),
+        close_button: close.downgrade(),
         spec: spec.clone(),
         connection,
         pid: Cell::new(None),
         cancelled: Cell::new(false),
         cancellable: gio::Cancellable::new(),
+    });
+    let s = Rc::downgrade(state);
+    let h = Rc::downgrade(&handle);
+    close.connect_clicked(move |_| {
+        if let (Some(s), Some(h)) = (s.upgrade(), h.upgrade()) {
+            actions::close_split(&s, &h);
+        }
     });
     state.sessions.borrow_mut().retain(|s| s.strong_count() > 0);
     state.sessions.borrow_mut().push(Rc::downgrade(&handle));

@@ -8,6 +8,7 @@ Primera versión funcional en desarrollo: no es una réplica completa de MobaXte
 - Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas reordenables.
 - Filtro de conexiones y lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
 - Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom, reconexión y desconexión desde el menú o la barra contextual.
+- Cada división tiene una **×** para cerrar solo ese panel y su proceso. El panel restante ocupa el espacio disponible; para cerrar la última terminal usa la **×** de su pestaña.
 - Terminal local mediante GTK4/VTE: PTY, Unicode, redimensionado y scrollback de 10.000 líneas.
 - Ventana **Administrar sesiones** (Ctrl+Mayús+S): crear, editar, duplicar, eliminar con confirmación, buscar, agrupar y marcar favoritos.
 - SSH mediante OpenSSH con usuario, puerto, clave y salto; contraseñas solicitadas en el PTY.

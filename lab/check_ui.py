@@ -12,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("scenario", choices=["sessions", "ssh", "splits", "menus"])
+    parser.add_argument("scenario", choices=["sessions", "ssh", "splits", "close-splits", "menus"])
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--scale", choices=[1, 2], default=1, type=int)
     args = parser.parse_args()
@@ -46,6 +46,9 @@ def main():
         else:
             env["NEXUTERM_SMOKE_ACTIONS"] = "1"
             marker = "NEXUTERM_SMOKE_ACTIONS_OK"
+            if args.scenario == "close-splits":
+                env["NEXUTERM_SMOKE_CLOSE_SPLITS"] = "1"
+                marker = "NEXUTERM_SMOKE_CLOSE_SPLITS_OK"
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 {}x{}x24".format(width * args.scale, height * args.scale), "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], env=env, cwd=ROOT, capture_output=True, text=True, timeout=30)
         (artifacts / (tag + ".log")).write_text(result.stdout + result.stderr)
         if result.returncode or marker not in result.stderr or not screenshot.exists():

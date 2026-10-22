@@ -165,6 +165,7 @@ pub(super) fn install_actions(
                                     gtk::Orientation::Vertical
                                 };
                                 let paned = gtk::Paned::new(orientation);
+                                paned.add_css_class("nexuterm-terminal-split");
                                 paned.set_hexpand(true);
                                 paned.set_vexpand(true);
                                 paned.set_start_child(Some(&old));
@@ -231,6 +232,13 @@ pub(super) fn install_actions(
 }
 
 pub(super) fn update_actions(s: &State) {
+    for session in s.sessions.borrow().iter().filter_map(Weak::upgrade) {
+        if let (Some(t), Some(button)) =
+            (session.terminal.upgrade(), session.close_button.upgrade())
+        {
+            button.set_visible(split_parent(&t).is_some());
+        }
+    }
     if let Some(w) = s.window.upgrade() {
         let session = active_session(s);
         let terminal = session.is_some();
@@ -254,6 +262,90 @@ pub(super) fn update_actions(s: &State) {
             }
         }
     }
+}
+
+fn split_parent(term: &vte4::Terminal) -> Option<(gtk::Widget, gtk::Paned)> {
+    let mut branch = term.parent()?;
+    while let Some(parent) = branch.parent() {
+        if parent.has_css_class("nexuterm-terminal-split") {
+            return Some((branch, parent.downcast().ok()?));
+        }
+        branch = parent;
+    }
+    None
+}
+
+pub(super) fn close_split(state: &State, session: &Session) {
+    let Some(term) = session.terminal.upgrade() else {
+        return;
+    };
+    let Some((branch, split)) = split_parent(&term) else {
+        return;
+    };
+    let Some(parent) = split.parent().and_downcast::<gtk::Box>() else {
+        return;
+    };
+    let sibling = if split.start_child().as_ref() == Some(&branch) {
+        split.end_child()
+    } else {
+        split.start_child()
+    };
+    let Some(sibling) = sibling else {
+        return;
+    };
+    session.stop();
+    split.set_start_child(gtk::Widget::NONE);
+    split.set_end_child(gtk::Widget::NONE);
+    parent.remove(&split);
+    parent.append(&sibling);
+    let next = state
+        .sessions
+        .borrow()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter_map(|s| s.terminal.upgrade())
+        .find(|t| t.is_ancestor(&sibling));
+    if let Some(next) = next {
+        next.grab_focus();
+    }
+    update_actions(state);
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_close_splits(state: &State, window: &gtk::ApplicationWindow) {
+    let terminals = || {
+        let page = state.notebook.selected_page().unwrap().child();
+        state
+            .sessions
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|s| s.terminal.upgrade().is_some_and(|t| t.is_ancestor(&page)))
+            .collect::<Vec<_>>()
+    };
+    // Close the nested leaf, then the surviving inner branch.
+    for expected in [2, 1] {
+        let current = active_session(state).unwrap();
+        let close = current.close_button.upgrade().unwrap();
+        assert!(close.is_visible());
+        close.emit_clicked();
+        assert!(current.cancelled.get());
+        assert_eq!(terminals().len(), expected);
+        assert_eq!(state.notebook.n_pages(), 1);
+    }
+    let survivor = terminals().pop().unwrap();
+    assert!(!survivor.close_button.upgrade().unwrap().is_visible());
+    assert!(split_parent(&survivor.terminal.upgrade().unwrap()).is_none());
+    // Also close the original side, keeping the newly created terminal alive.
+    gio::prelude::ActionGroupExt::activate_action(window, "split-horizontal", None);
+    assert_eq!(terminals().len(), 2);
+    survivor.close_button.upgrade().unwrap().emit_clicked();
+    assert!(survivor.cancelled.get());
+    let remaining = terminals();
+    assert_eq!(remaining.len(), 1);
+    assert!(!remaining[0].cancelled.get());
+    assert!(!remaining[0].close_button.upgrade().unwrap().is_visible());
+    eprintln!("NEXUTERM_SMOKE_CLOSE_SPLITS_OK");
 }
 
 fn terminal_search(term: &vte4::Terminal, window: &gtk::ApplicationWindow) {
