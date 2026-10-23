@@ -24,6 +24,12 @@ pub struct SshConnection {
 }
 impl SshConnection {
     pub fn new(profile: Profile) -> Result<Arc<Self>, String> {
+        if !matches!(
+            profile.protocol,
+            crate::config::Protocol::Ssh | crate::config::Protocol::Sftp
+        ) {
+            return Err("Esta conexión requiere SSH o SFTP".into());
+        }
         connection::validate(&profile)?;
         let directory = tempfile::Builder::new()
             .prefix("nx-")
@@ -92,7 +98,7 @@ impl SshConnection {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        Err("La conexión SSH aún no está autenticada. Completa el diálogo del terminal y vuelve a intentarlo.".into())
+        Err("La conexión SSH aún no está autenticada. Completa la autenticación y vuelve a intentarlo.".into())
     }
     pub async fn sftp(&self) -> Result<SftpChannel, String> {
         self.ready().await?;

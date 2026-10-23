@@ -10,6 +10,8 @@ ssh-keygen -A
 printf '\nPasswordAuthentication yes\nPermitRootLogin no\n' >> /etc/ssh/sshd_config
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -keyout /etc/xrdp/key.pem -out /etc/xrdp/cert.pem -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' >/dev/null 2>&1
 chown xrdp:xrdp /etc/xrdp/key.pem /etc/xrdp/cert.pem
+# This image provides Xvnc, not xorgxrdp. Select its existing session backend.
+sed -i 's/^autorun=.*/autorun=Xvnc/' /etc/xrdp/xrdp.ini
 printf '%s' "$password" | tigervncpasswd -f > /home/tester/.vnc-password
 chown tester:tester /home/tester/.vnc-password
 chmod 600 /home/tester/.vnc-password

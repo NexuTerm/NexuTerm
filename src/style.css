@@ -9,15 +9,14 @@
     padding-bottom: 0;
 }
 
-.nexuterm-section,
-.nexuterm-terminal {
+.nexuterm-section {
     border: 1px solid alpha(currentColor, 0.24);
     border-radius: 10px;
 }
 
 .nexuterm-terminal {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
+    border: none;
+    border-radius: 0;
 }
 
 .nexuterm-terminal scrollbar {

@@ -8,7 +8,12 @@ use std::{
 };
 use tokio::sync::mpsc;
 unsafe extern "C" {
-    fn nx_vnc_open(host: *const c_char, port: i32, password: *const c_char) -> *mut c_void;
+    fn nx_vnc_open(
+        host: *const c_char,
+        port: i32,
+        username: *const c_char,
+        password: *const c_char,
+    ) -> *mut c_void;
     fn nx_vnc_poll(p: *mut c_void) -> i32;
     fn nx_vnc_frame(p: *mut c_void, w: *mut i32, h: *mut i32) -> *const u8;
     fn nx_vnc_key(p: *mut c_void, key: u32, down: i32);
@@ -31,8 +36,22 @@ pub fn run(
     desktop: Arc<Desktop>,
 ) -> Result<(), String> {
     let host = CString::new(p.host).map_err(|e| e.to_string())?;
-    let pass = CString::new(password.as_bytes()).map_err(|e| e.to_string())?;
-    let pointer = unsafe { nx_vnc_open(host.as_ptr(), p.port.into(), pass.as_ptr()) };
+    let user = CString::new(p.username).map_err(|e| e.to_string())?;
+    if password.as_bytes().contains(&0) {
+        return Err("Contraseña VNC no válida".into());
+    }
+    let mut pass = zeroize::Zeroizing::new(password.as_bytes().to_vec());
+    pass.push(0);
+    let pointer = unsafe {
+        nx_vnc_open(
+            host.as_ptr(),
+            p.port.into(),
+            user.as_ptr(),
+            pass.as_ptr().cast(),
+        )
+    };
+    drop(pass);
+    drop(password);
     if pointer.is_null() {
         return Err("No se pudo autenticar o abrir el servidor VNC".into());
     }
@@ -63,7 +82,7 @@ pub fn run(
         let (mut w, mut h) = (0, 0);
         let ptr = unsafe { nx_vnc_frame(client.0, &mut w, &mut h) };
         if !ptr.is_null() {
-            if w < 1 || h < 1 || w as usize * h as usize > 16777216 {
+            if w < 1 || h < 1 || w > 65535 || h > 65535 || w as usize * h as usize > 16777216 {
                 return Err("Framebuffer fuera de límite".into());
             }
             let mut rgba =

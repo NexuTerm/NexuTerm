@@ -22,17 +22,23 @@ pub fn validate(p: &Profile) -> Result<(), String> {
     if p.port == 0 {
         return Err("Puerto fuera del rango 1–65535".into());
     }
-    if p.username.starts_with('-')
-        || p.username
-            .chars()
-            .any(|c| c.is_control() || c.is_whitespace() || "@/\\".contains(c))
+    if p.username.chars().any(char::is_control)
+        || (p.protocol != Protocol::Ftp
+            && (p.username.starts_with('-')
+                || p.username
+                    .chars()
+                    .any(|c| c.is_whitespace() || "@/\\".contains(c))))
     {
         return Err("Usuario inválido".into());
     }
-    if p.identity.contains('\0') || p.domain.chars().any(char::is_control) {
-        return Err("Identidad o dominio inválido".into());
+    if matches!(p.protocol, Protocol::Ssh | Protocol::Sftp) && p.identity.contains('\0') {
+        return Err("Clave SSH inválida".into());
     }
-    if !p.jump_host.is_empty()
+    if p.protocol == Protocol::Rdp && p.domain.chars().any(char::is_control) {
+        return Err("Dominio RDP inválido".into());
+    }
+    if matches!(p.protocol, Protocol::Ssh | Protocol::Sftp)
+        && !p.jump_host.is_empty()
         && (p.jump_host.starts_with('-')
             || p.jump_host
                 .chars()
@@ -72,13 +78,8 @@ fn command_with_lookup(
     lookup: impl FnOnce(&[&str]) -> Option<String>,
 ) -> Result<CommandSpec, String> {
     validate(p)?;
-    let ipv6_host = if p.host.contains(':') {
-        format!("[{}]", p.host)
-    } else {
-        p.host.clone()
-    };
     let (candidates, args): (&[&str], Vec<String>) = match p.protocol {
-        Protocol::Ssh => {
+        Protocol::Ssh | Protocol::Sftp => {
             let mut a = vec![
                 "-p".into(),
                 p.port.to_string(),
@@ -90,33 +91,25 @@ fn command_with_lookup(
             if !p.username.is_empty() {
                 a.extend(["-l".into(), p.username.clone()]);
             }
-            if !p.identity.is_empty() {
+            if p.ssh_password {
+                a.extend(["-o".into(),"PreferredAuthentications=password,keyboard-interactive".into(),"-o".into(),"PubkeyAuthentication=no".into()]);
+            }
+            if !p.identity.is_empty() && !p.ssh_password {
                 a.extend(["-i".into(), p.identity.clone()]);
             }
             if !p.jump_host.is_empty() {
                 a.extend(["-J".into(), p.jump_host.clone()]);
             }
+            if p.protocol == Protocol::Sftp {
+                a.push("-N".into());
+            }
             a.extend(["--".into(), p.host.clone()]);
             (&["ssh"], a)
         }
-        Protocol::Rdp => {
-            let mut a = vec![
-                format!("/v:{ipv6_host}:{}", p.port),
-                "/dynamic-resolution".into(),
-                "+clipboard".into(),
-            ];
-            if !p.username.is_empty() {
-                a.push(format!("/u:{}", p.username));
-            }
-            if !p.domain.is_empty() {
-                a.push(format!("/d:{}", p.domain));
-            }
-            (&["xfreerdp3", "xfreerdp"], a)
-        }
-        Protocol::Vnc => (
-            &["vncviewer", "xtigervncviewer"],
-            vec![format!("{ipv6_host}::{}", p.port)],
-        ),
+        Protocol::Telnet => (&["telnet"], vec![p.host.clone(), p.port.to_string()]),
+        Protocol::Ftp => return Err("FTP se abre en el explorador gráfico de NexuTerm".into()),
+        Protocol::Rdp => return Err("RDP se abre en el visor integrado de NexuTerm".into()),
+        Protocol::Vnc => return Err("VNC se abre en el visor integrado de NexuTerm".into()),
     };
     let program = lookup(candidates).ok_or_else(|| {
         format!(
@@ -129,7 +122,7 @@ fn command_with_lookup(
 
 pub fn sftp_uri(p: &Profile) -> Result<String, String> {
     validate(p)?;
-    if p.protocol != Protocol::Ssh {
+    if !matches!(p.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Err("SFTP requiere una sesión SSH".into());
     }
     let host = if p.host.contains(':') {
@@ -156,10 +149,68 @@ mod tests {
         }
     }
     #[test]
+    fn ssh_password_mode_avoids_keys_and_never_stores_password_arguments(){
+        let mut p=profile();p.ssh_password=true;p.identity="/tmp/ignored-key".into();
+        let spec=command_with_lookup(&p, |_|Some("ssh".into())).unwrap();
+        assert!(spec.args.iter().any(|s|s=="PreferredAuthentications=password,keyboard-interactive"));
+        assert!(spec.args.iter().any(|s|s=="PubkeyAuthentication=no"));assert!(!spec.args.iter().any(|s|s=="-i"||s=="/tmp/ignored-key"));
+    }
+    #[test]
     fn rejects_option_hosts() {
         let mut p = profile();
         p.host = "-oProxyCommand=id".into();
         assert!(validate(&p).is_err());
+    }
+    #[test]
+    fn ftp_usernames_allow_email_and_domain_without_control_characters() {
+        let mut p = profile();
+        p.protocol = Protocol::Ftp;
+        p.username = "domain\\demo@example.invalid".into();
+        assert!(validate(&p).is_ok());
+        p.username.push('\n');
+        assert!(validate(&p).is_err());
+        p.username.pop();
+        p.protocol = Protocol::Ssh;
+        assert!(validate(&p).is_err());
+    }
+    #[test]
+    fn basic_protocols_use_separate_arguments_and_no_shell() {
+        let p = Profile {
+            protocol: Protocol::Telnet,
+            port: 23,
+            host: "::1".into(),
+            ..profile()
+        };
+        let command = command_with_lookup(&p, |candidates| {
+            assert_eq!(candidates, ["telnet"]);
+            Some("/test/telnet".into())
+        })
+        .unwrap();
+        assert_eq!(command.args, ["::1", "23"]);
+        let p = Profile {
+            protocol: Protocol::Sftp,
+            port: 2200,
+            ..profile()
+        };
+        let command = command_with_lookup(&p, |_| Some("/test/ssh".into())).unwrap();
+        assert!(command.args.contains(&"-N".into()));
+        assert!(command.args.contains(&"2200".into()));
+        assert!(sftp_uri(&p).unwrap().starts_with("sftp://"));
+    }
+    #[test]
+    fn validates_only_fields_used_by_protocol() {
+        let mut p = profile();
+        p.identity = "invalid\0key".into();
+        p.jump_host = "-invalid".into();
+        p.domain = "invalid\ndomain".into();
+        assert!(validate(&p).is_err());
+        p.protocol = Protocol::Rdp;
+        assert!(validate(&p).is_err());
+        p.domain.clear();
+        assert!(validate(&p).is_ok());
+        p.protocol = Protocol::Vnc;
+        p.domain = "invalid\ndomain".into();
+        assert!(validate(&p).is_ok());
     }
     #[test]
     fn ipv6_sftp_and_escaped_user() {
@@ -182,42 +233,38 @@ mod tests {
         assert!(s.args.contains(&p.identity));
         assert_ne!(s.program, "sh");
     }
+
     #[test]
-    fn desktop_clients_keep_security_defaults_and_explicit_ports() {
-        let mut p = profile();
-        p.protocol = Protocol::Rdp;
-        p.host = "::1".into();
-        p.port = 3391;
-        p.username = "testuser".into();
-        p.domain = "LAB".into();
-        let command = command_with_lookup(&p, |candidates| {
-            assert_eq!(candidates, ["xfreerdp3", "xfreerdp"]);
-            Some("/test/xfreerdp3".into())
-        })
-        .unwrap();
-        assert!(command.args.contains(&"/v:[::1]:3391".into()));
-        assert!(command.args.contains(&"/u:testuser".into()));
+    fn ftp_never_launches_a_console_client() {
+        let p = Profile {
+            protocol: Protocol::Ftp,
+            ..profile()
+        };
         assert!(
-            !command
-                .args
-                .iter()
-                .any(|a| a.contains("cert:ignore") || a.starts_with("/p:"))
+            command_with_lookup(&p, |_| panic!("FTP must use the graphical browser"))
+                .unwrap_err()
+                .contains("explorador gráfico")
         );
-        p.protocol = Protocol::Vnc;
-        p.port = 5907;
-        let vnc = command_with_lookup(&p, |candidates| {
-            assert_eq!(candidates, ["vncviewer", "xtigervncviewer"]);
-            Some("/test/vncviewer".into())
-        })
-        .unwrap();
-        assert_eq!(vnc.args, vec!["[::1]::5907"]);
+    }
+    #[test]
+    fn vnc_never_launches_an_external_viewer() {
+        let p = Profile {
+            protocol: Protocol::Vnc,
+            ..profile()
+        };
+        let error = command_with_lookup(&p, |_| panic!("VNC must not look up external clients"))
+            .unwrap_err();
+        assert!(error.contains("visor integrado"));
     }
 
     #[test]
-    fn missing_desktop_client_reports_candidates() {
-        let mut p = profile();
-        p.protocol = Protocol::Rdp;
-        let error = command_with_lookup(&p, |_| None).unwrap_err();
-        assert!(error.contains("xfreerdp3 / xfreerdp"));
+    fn rdp_never_launches_an_external_viewer() {
+        let p = Profile {
+            protocol: Protocol::Rdp,
+            ..profile()
+        };
+        let error = command_with_lookup(&p, |_| panic!("RDP must not look up external clients"))
+            .unwrap_err();
+        assert!(error.contains("visor integrado"));
     }
 }

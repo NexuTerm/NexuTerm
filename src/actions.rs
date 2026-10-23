@@ -114,12 +114,8 @@ pub(super) fn install_actions(
                 "new-terminal" => local_terminal(&s),
                 "open-file" => crate::files::choose_editor(&s, &w),
                 "remote-files" => {
-                    if let Some(page) = s.notebook.selected_page()
-                        && let Ok(paned) = page.child().downcast::<gtk::Paned>()
-                        && let Some(panel) = paned.start_child()
-                    {
-                        panel.set_visible(!panel.is_visible());
-                    }
+                    update_sidebar(&s);
+                    s.sidebar_area.set_visible(true);
                 }
                 "preferences" => preferences(&s, &w),
                 "about" => {
@@ -246,7 +242,12 @@ pub(super) fn update_actions(s: &State) {
             .lookup_action("remote-files")
             .and_downcast::<gio::SimpleAction>()
         {
-            a.set_enabled(session.is_some_and(|session| session.connection.is_some()));
+            a.set_enabled(session.as_ref().is_some_and(|session| {
+                session
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.profile.protocol == Protocol::Ssh)
+            }));
         }
         for name in [
             "search",
@@ -258,7 +259,15 @@ pub(super) fn update_actions(s: &State) {
             "zoom-out",
         ] {
             if let Some(a) = w.lookup_action(name).and_downcast::<gio::SimpleAction>() {
-                a.set_enabled(terminal);
+                let sftp = session.as_ref().is_some_and(|session| {
+                    session
+                        .connection
+                        .as_ref()
+                        .is_some_and(|connection| connection.profile.protocol == Protocol::Sftp)
+                });
+                a.set_enabled(
+                    terminal && !(sftp && matches!(name, "split-horizontal" | "split-vertical")),
+                );
             }
         }
     }

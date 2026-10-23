@@ -57,28 +57,49 @@ pub struct Client {
     pub cancel: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
+pub struct WorkerChannels {
+    pub requests: mpsc::Receiver<Request>,
+    pub events: mpsc::Sender<Event>,
+    pub progress: watch::Sender<Progress>,
+    pub cancel: Arc<AtomicBool>,
+    pub stop: Arc<AtomicBool>,
+}
 impl Client {
-    pub fn start(connection: Arc<SshConnection>) -> Self {
+    pub fn channels() -> (Self, WorkerChannels) {
         let (requests, receiver) = mpsc::channel(4);
         let (sender, events) = mpsc::channel(4);
         let (progress_sender, progress) = watch::channel(Progress::default());
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let worker = WorkerChannels {
+            requests: receiver,
+            events: sender,
+            progress: progress_sender,
+            cancel: cancel.clone(),
+            stop: stop.clone(),
+        };
+        (
+            Self {
+                requests,
+                events,
+                progress,
+                cancel,
+                stop,
+            },
+            worker,
+        )
+    }
+    pub fn start(connection: Arc<SshConnection>) -> Self {
+        let (client, channels) = Self::channels();
         crate::runtime::runtime().spawn(worker(
             connection,
-            receiver,
-            sender,
-            progress_sender,
-            cancel.clone(),
-            stop.clone(),
+            channels.requests,
+            channels.events,
+            channels.progress,
+            channels.cancel,
+            channels.stop,
         ));
-        Self {
-            requests,
-            events,
-            progress,
-            cancel,
-            stop,
-        }
+        client
     }
     pub fn stop(&self) {
         self.cancel.store(true, Ordering::Relaxed);

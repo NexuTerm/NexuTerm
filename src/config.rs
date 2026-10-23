@@ -14,6 +14,9 @@ pub enum Protocol {
     Ssh,
     Rdp,
     Vnc,
+    Telnet,
+    Ftp,
+    Sftp,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,6 +29,7 @@ pub struct Profile {
     pub port: u16,
     pub username: String,
     pub identity: String,
+    pub ssh_password: bool,
     pub jump_host: String,
     pub domain: String,
     pub group: String,
@@ -229,6 +233,32 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persists_basic_protocol_profiles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut config = Config::default();
+        for (protocol, port) in [
+            (Protocol::Telnet, 23),
+            (Protocol::Ftp, 21),
+            (Protocol::Sftp, 22),
+        ] {
+            config.profiles.push(Profile {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: format!("{protocol:?}"),
+                protocol,
+                port,
+                host: "example.invalid".into(),
+                ..Profile::default()
+            });
+        }
+        save(&path, &config).unwrap();
+        let loaded = load(&path).unwrap();
+        for (before, after) in config.profiles.iter().zip(loaded.profiles.iter()) {
+            assert_eq!(before.protocol, after.protocol);
+            assert_eq!(before.port, after.port);
+        }
+    }
     #[test]
     fn roundtrip_and_version_rejection() {
         let path = env::temp_dir().join(format!("nexuterm-test-{}.json", std::process::id()));

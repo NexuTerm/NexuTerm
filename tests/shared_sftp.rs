@@ -14,11 +14,18 @@ use std::{
 #[tokio::test]
 #[ignore = "requires the local rootless laboratory: python3 lab/lab.py up && python3 lab/lab.py trust"]
 async fn shared_socket_navigation_and_transfers() {
-    tokio::time::timeout(Duration::from_secs(90), laboratory())
+    tokio::time::timeout(Duration::from_secs(90), laboratory(Protocol::Ssh))
         .await
         .expect("laboratory timeout");
 }
-async fn laboratory() {
+#[tokio::test]
+#[ignore = "requires the disposable local laboratory"]
+async fn standalone_sftp_navigation_and_transfers() {
+    tokio::time::timeout(Duration::from_secs(90), laboratory(Protocol::Sftp))
+        .await
+        .expect("laboratory timeout");
+}
+async fn laboratory(protocol: Protocol) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".lab");
     assert!(
         root.join("known_hosts").exists(),
@@ -27,7 +34,7 @@ async fn laboratory() {
     let connection = SshConnection::new(Profile {
         id: "lab-only".into(),
         name: "Local lab".into(),
-        protocol: Protocol::Ssh,
+        protocol,
         host: "127.0.0.1".into(),
         port: 22222,
         username: "tester".into(),
@@ -36,7 +43,8 @@ async fn laboratory() {
     })
     .unwrap();
     let spec = connection.terminal_command().unwrap();
-    let mut master = tokio::process::Command::new(spec.program)
+    let mut command = tokio::process::Command::new(spec.program);
+    command
         .args([
             "-o",
             "BatchMode=yes",
@@ -50,8 +58,11 @@ async fn laboratory() {
             "UserKnownHostsFile={}",
             root.join("known_hosts").display()
         ))
-        .args(spec.args)
-        .arg("sleep 120")
+        .args(spec.args);
+    if protocol == Protocol::Ssh {
+        command.arg("sleep 120");
+    }
+    let mut master = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

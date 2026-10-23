@@ -116,6 +116,9 @@ fn refresh(state: &Rc<State>, window: &gtk::ApplicationWindow, list: &gtk::ListB
             Protocol::Ssh => "SSH",
             Protocol::Rdp => "RDP",
             Protocol::Vnc => "VNC",
+            Protocol::Telnet => "Telnet",
+            Protocol::Ftp => "FTP",
+            Protocol::Sftp => "SFTP",
         };
         let destination = gtk::Label::new(Some(&format!(
             "{} · {}@{}:{}{}",
@@ -210,6 +213,7 @@ fn change(state: &Rc<State>, id: &str, duplicate: bool) {
     let Some(index) = config.profiles.iter().position(|p| p.id == id) else {
         return;
     };
+    let removed = (!duplicate).then(|| config.profiles[index].clone());
     if duplicate {
         let mut profile = config.profiles[index].clone();
         profile.id = uuid::Uuid::new_v4().to_string();
@@ -228,6 +232,11 @@ fn change(state: &Rc<State>, id: &str, duplicate: bool) {
         return;
     }
     *state.config.borrow_mut() = config;
+    if let Some(profile) = removed
+        && profile.protocol == Protocol::Ftp
+    {
+        forget_ftp_profile(state, profile);
+    }
     if let Some(window) = state.window.upgrade() {
         refresh_sidebar(state, &window);
     }
@@ -262,7 +271,7 @@ pub(super) fn smoke(state: &Rc<State>) {
         (window, grid)
     }
     fn save(grid: &gtk::Grid) {
-        grid.child_at(0, 11)
+        grid.child_at(0, 12)
             .unwrap()
             .last_child()
             .unwrap()
@@ -298,6 +307,68 @@ pub(super) fn smoke(state: &Rc<State>) {
     assert_eq!(edited.favorite, first.favorite);
     profile_dialog(state, &manager, None);
     let (_, grid) = form();
+    let protocol = grid
+        .child_at(1, 1)
+        .unwrap()
+        .downcast::<gtk::DropDown>()
+        .unwrap();
+    let port = grid
+        .child_at(1, 3)
+        .unwrap()
+        .downcast::<gtk::Entry>()
+        .unwrap();
+    let visible = |row| {
+        assert_eq!(
+            grid.child_at(0, row).unwrap().is_visible(),
+            grid.child_at(1, row).unwrap().is_visible()
+        );
+        grid.child_at(1, row).unwrap().is_visible()
+    };
+    assert!(visible(4) && visible(5) && visible(6) && !visible(7));
+    port.set_text("2222");
+    protocol.set_selected(1);
+    assert!(visible(4) && !visible(5) && !visible(6) && visible(7));
+    assert_eq!(port.text(), "3389");
+    port.set_text("3395");
+    protocol.set_selected(2);
+    assert!(!visible(4) && !visible(5) && !visible(6) && !visible(7));
+    assert_eq!(port.text(), "5900");
+    let user_toggle = grid
+        .child_at(0, 9)
+        .unwrap()
+        .downcast::<gtk::CheckButton>()
+        .unwrap();
+    user_toggle.set_active(true);
+    assert!(visible(4));
+    user_toggle.set_active(false);
+    port.set_text("5901");
+    protocol.set_selected(0);
+    assert_eq!(port.text(), "2222");
+    protocol.set_selected(1);
+    assert_eq!(port.text(), "3395");
+    protocol.set_selected(2);
+    assert_eq!(port.text(), "5901");
+    for (selected, default_port, user, ssh_fields) in [
+        (3, "23", false, false),
+        (4, "21", true, false),
+        (5, "22", true, true),
+    ] {
+        protocol.set_selected(selected);
+        assert_eq!(port.text(), default_port);
+        assert_eq!(visible(4), user);
+        assert_eq!(visible(5), ssh_fields);
+        assert_eq!(visible(6), ssh_fields);
+        assert!(!visible(7));
+        assert_eq!(visible(8), selected == 4);
+    }
+    protocol.set_selected(2);
+    for row in [4, 5, 6, 7] {
+        grid.child_at(1, row)
+            .unwrap()
+            .downcast::<gtk::Entry>()
+            .unwrap()
+            .set_text("unused");
+    }
     grid.child_at(1, 0)
         .unwrap()
         .downcast::<gtk::Entry>()
@@ -311,6 +382,13 @@ pub(super) fn smoke(state: &Rc<State>) {
     save(&grid);
     let created = state.config.borrow().profiles.last().unwrap().clone();
     assert_eq!(created.name, "Nueva sesión de prueba");
+    assert_eq!(created.port, 5901);
+    assert!(
+        created.username.is_empty()
+            && created.identity.is_empty()
+            && created.jump_host.is_empty()
+            && created.domain.is_empty()
+    );
     change(state, &created.id, false);
     change(state, &copy.id, false);
     let persisted = config::load(&state.path).unwrap();

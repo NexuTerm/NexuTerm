@@ -2,3 +2,7 @@
 *.swp
 /.lab/
 /artifacts/
+/dist/
+__pycache__/
+/.local/whisper/
+/.local/ai-providers/
