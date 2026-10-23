@@ -62,6 +62,7 @@ pub(super) fn install_actions(
             "Vista y herramientas",
             vec![
                 ("Mostrar conexiones", "sidebar"),
+                ("Agentes de IA", "ai-agents"),
                 ("Abrir archivo…", "open-file"),
                 ("Preferencias…", "preferences"),
                 ("Acerca de NexuTerm", "about"),

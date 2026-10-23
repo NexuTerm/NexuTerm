@@ -12,6 +12,8 @@ use std::{
 use vte4::prelude::*;
 
 pub struct State {
+    ai_process: RefCell<Option<Rc<ai_panel::Process>>>,
+    ai_keys: RefCell<std::collections::HashMap<(String, String), zeroize::Zeroizing<String>>>,
     pub notebook: adw::TabView,
     pub status: gtk::Label,
     sidebar: gtk::ListBox,
@@ -35,6 +37,8 @@ pub struct State {
 }
 
 struct Session {
+    id:String,
+    title:String,
     pid: Cell<Option<i32>>,
     terminal: glib::WeakRef<vte4::Terminal>,
     close_button: glib::WeakRef<gtk::Button>,
@@ -46,6 +50,16 @@ struct Session {
 
 #[path = "actions.rs"]
 mod actions;
+#[path="ai_terminals.rs"]
+mod ai_terminals;
+#[path = "ai_panel.rs"]
+mod ai_panel;
+#[path = "ai_credentials.rs"]
+mod ai_credentials;
+#[path = "codex_chat.rs"]
+mod codex_chat;
+#[path = "ai_dictation.rs"]
+mod ai_dictation;
 #[path = "sessions.rs"]
 mod sessions;
 pub(crate) use actions::icon_button;
@@ -227,7 +241,15 @@ pub fn build(app: &gtk::Application) {
     split.set_start_child(Some(&sidebar_area));
     split.set_end_child(Some(&workspace));
     split.set_resize_start_child(false);
-    root.set_content(Some(&split));
+    let ai_side = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    ai_side.set_visible(false);
+    let ai_split = gtk::Paned::new(gtk::Orientation::Horizontal);
+    ai_split.add_css_class("nexuterm-split");
+    ai_split.set_start_child(Some(&split));
+    ai_split.set_end_child(Some(&ai_side));
+    ai_split.set_resize_end_child(false);
+    ai_split.set_shrink_end_child(false);
+    root.set_content(Some(&ai_split));
     let status = gtk::Label::new(Some("Listo"));
     status.set_xalign(0.0);
     status.set_margin_start(12);
@@ -235,6 +257,8 @@ pub fn build(app: &gtk::Application) {
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        ai_process: RefCell::new(None),
+        ai_keys: RefCell::new(std::collections::HashMap::new()),
         notebook,
         status,
         sidebar,
@@ -256,6 +280,10 @@ pub fn build(app: &gtk::Application) {
         desktops: RefCell::new(Vec::new()),
         sftp_masters: RefCell::new(Vec::new()),
     });
+    ai_panel::install(&state, &window, app, &ai_side);
+    let ai_button = icon_button("system-users-symbolic", "Agentes de IA · Ctrl+Mayús+I");
+    ai_button.set_action_name(Some("win.ai-agents"));
+    header.pack_end(&ai_button);
     adw_window.set_content(Some(&root));
     install_actions(&state, &window, app, &sidebar_area, &menu_button);
     let s = Rc::downgrade(&state);
@@ -304,7 +332,7 @@ pub fn build(app: &gtk::Application) {
                 .set_text("Espera a que finalicen las escrituras o cancela las transferencias antes de cerrar.");
             return glib::Propagation::Stop;
         }
-        let active = s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
+        let active = s.ai_process.borrow().as_ref().is_some_and(|p| p.busy()) || s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
             .any(|d| !d.finished.load(std::sync::atomic::Ordering::Relaxed)) || s
             .sessions
             .borrow()
@@ -321,7 +349,7 @@ pub fn build(app: &gtk::Application) {
             let dialog = gtk::AlertDialog::builder()
                 .modal(true)
                 .message("¿Cerrar NexuTerm?")
-                .detail("Se cerrarán las conexiones activas y se perderán los cambios sin guardar.")
+                .detail("Se cerrarán las conexiones y agentes de IA activos y se perderán los cambios sin guardar.")
                 .buttons(["Cancelar", "Cerrar"])
                 .cancel_button(0)
                 .default_button(0)
@@ -336,6 +364,7 @@ pub fn build(app: &gtk::Application) {
             });
             return glib::Propagation::Stop;
         }
+        if let Some(process) = s.ai_process.borrow().as_ref() { process.shutdown(); }
         for h in s.sessions.borrow().iter().filter_map(Weak::upgrade) { h.stop(); }
         for master in s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade) { master.close(); }
         for d in s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade) { d.close(); }
@@ -562,6 +591,8 @@ pub fn build(app: &gtk::Application) {
             || std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
         {
             20
+        } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals")) {
+            10
         } else if std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
             8
         } else {
@@ -708,6 +739,8 @@ fn terminal_in(
     controls.append(&scrollbar);
     page.append(&controls);
     let handle = Rc::new(Session {
+        id:uuid::Uuid::new_v4().to_string(),
+        title:title.to_owned(),
         terminal: term.downgrade(),
         close_button: close.downgrade(),
         spec: spec.clone(),

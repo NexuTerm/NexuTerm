@@ -43,3 +43,12 @@
     border-top-right-radius: 8px;
     box-shadow: none;
 }
+
+/* Native agent chat: compact header, quiet transcript and anchored composer. */
+.ai-panel { background: @view_bg_color; }
+.ai-panel button.flat { padding: 5px; }
+.ai-panel dropdown.flat > button { background: transparent; box-shadow: none; border: none; padding: 4px; }
+.ai-composer { background: alpha(currentColor, 0.035); }
+.ai-composer textview, .ai-composer textview text { background: transparent; }
+.ai-panel .card { border-radius: 12px; box-shadow: none; background: alpha(currentColor, 0.025); }
+.ai-panel .card textview, .ai-panel .card textview text { background: transparent; }
