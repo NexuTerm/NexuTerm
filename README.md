@@ -1,6 +1,6 @@
 # NexuTerm
 
-Aplicación Rust para Linux con terminal por pestañas y conexiones SSH, SFTP, RDP y VNC.
+Aplicación Rust para Linux con terminal por pestañas y conexiones SSH, SFTP, Telnet, FTP, RDP y VNC.
 Primera versión funcional en desarrollo: no es una réplica completa de MobaXterm.
 
 ## Primera versión
@@ -9,16 +9,156 @@ Primera versión funcional en desarrollo: no es una réplica completa de MobaXte
 - Filtro de conexiones y lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
 - Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom, reconexión y desconexión desde el menú o la barra contextual.
 - Cada división tiene una **×** para cerrar solo ese panel y su proceso. El panel restante ocupa el espacio disponible; para cerrar la última terminal usa la **×** de su pestaña.
+- Paletas de terminal adaptadas al tema: gris carbón en oscuro y marfil en claro, texto, cursor y selección coordinados y colores ANSI suaves. Se actualizan también en terminales abiertas al cambiar el tema del sistema. Las aplicaciones que fijan sus propios colores RGB conservan esos colores.
 - Terminal local mediante GTK4/VTE: PTY, Unicode, redimensionado y scrollback de 10.000 líneas.
 - Ventana **Administrar sesiones** (Ctrl+Mayús+S): crear, editar, duplicar, eliminar con confirmación, buscar, agrupar y marcar favoritos.
+- FTP y SFTP con explorador gráfico de dos paneles, local y remoto: navegación, subida, descarga, progreso y cancelación. FTP configura usuario y contraseña antes de conectar; puede guardarse en el llavero o mantenerse durante la ejecución. FTP y Telnet transmiten sin cifrar.
+- Telnet abre una terminal integrada.
+- SFTP independiente utiliza OpenSSH con clave, agente o contraseña solicitada en una ventana gráfica. No abre un shell remoto.
 - SSH mediante OpenSSH con usuario, puerto, clave y salto; contraseñas solicitadas en el PTY.
-- Navegador remoto automático a la izquierda de cada pestaña SSH: ruta editable, carpeta de inicio, carpeta superior, páginas de 200 entradas, subida/descarga de archivos, progreso y cancelación. Usa SFTP sobre la conexión OpenSSH compartida del terminal, con la misma autenticación, puerto, clave y salto.
+- Navegador remoto automático en el lateral de la aplicación para cada sesión SSH: ruta editable, carpeta de inicio, carpeta superior, páginas de 200 entradas, subida/descarga de archivos, progreso y cancelación. Usa SFTP sobre la conexión OpenSSH compartida del terminal, con la misma autenticación, puerto, clave y salto.
 - Editor de texto mediante GIO, UTF-8 hasta 8 MiB, con comprobación etag antes de guardar y aviso de cambios sin guardar. El panel SFTP nuevo transfiere archivos; todavía no abre su editor remoto integrado.
-- RDP con FreeRDP y VNC con TigerVNC: **ventanas propias**, lanzadas desde una pestaña que muestra diagnóstico y acepta los prompts del cliente.
+- VNC integrado en una pestaña GTK: escritorio ajustado al área disponible, teclado, ratón y rueda, contraseña temporal y desconexión al cerrar la pestaña. No necesita Remmina ni otro visor.
+- RDP integrado mediante IronRDP: escritorio en una pestaña GTK, teclado, ratón, contraseña temporal y TLS con validación de certificado y nombre del servidor. No necesita FreeRDP ni Remmina.
 - Configuración XDG versionada, escritura atómica y archivo privado; no contiene campos de contraseña.
 
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
+
+## Agentes de IA y chat
+
+El botón **Agentes de IA** de la cabecera, el menú o **Ctrl+Mayús+I** abre una
+paleta lateral derecha redimensionable, independiente de las conexiones.
+En **Configurar agentes de IA** puedes añadir perfiles, editar el seleccionado o
+eliminarlo con confirmación. El selector y la vista de configuración agrupan las
+conexiones en **Locales** y **Web**. El botón **+** de la configuración añade un
+modelo mediante el formulario de conexión existente. El formulario limita el motor a
+los protocolos compatibles con la conexión y muestra sus parámetros aplicables.
+Las conexiones API no muestran ejecutable ni extensiones MCP externas; las nativas
+no muestran URL, límite de tokens ni espera de la API. Para Ollama local se consulta
+el soporte de herramientas anunciado por el modelo antes de habilitar acceso a
+terminales. En proveedores sin metadatos de capacidades, no se deducen capacidades
+adicionales únicamente a partir del nombre del modelo.
+
+Todas las plantillas abren el mismo chat gráfico. Elegir una plantilla y guardar
+crea una conexión independiente, la añade al selector y abre su chat; no sustituye
+al agente anterior ni abre una consola. El selector inferior contiene los modelos
+del agente activo, obtenidos del proveedor o añadidos en su configuración.
+
+- **Codex** utiliza `codex app-server`, con streaming, historial y aprobaciones.
+- **OpenCode** utiliza `opencode acp`, con catálogo de modelos y permisos ACP.
+- **Claude Code** requiere el adaptador `claude-agent-acp` instalado.
+- **Gemini CLI** utiliza `gemini --experimental-acp`.
+- **GitHub Copilot** utiliza `copilot --acp`.
+- **ACP personalizado** permite configurar otro ejecutable compatible.
+- **OpenAI Responses** y **Chat Completions** conectan por API. Hay plantillas
+  para DeepSeek, Gemini API, Ollama y servidores compatibles. Las respuestas API
+  se muestran al completarse; las conexiones nativas pueden transmitir fragmentos.
+
+Los ejecutables y adaptadores deben estar instalados. La compatibilidad con modelos,
+historial, permisos y autenticación depende de las capacidades del proveedor.
+OpenCode permite actualizar su catálogo gratuito sin sustituir automáticamente un
+modelo fallido por otro de pago. Consulta sus condiciones y disponibilidad en
+[OpenCode](https://opencode.ai/docs/).
+
+**Nueva conversación** inicia el perfil seleccionado; cambiar de agente abre su
+chat en el mismo panel. **Ctrl+Intro** envía y **Detener** cancela. Ocultar la
+paleta conserva la conversación; cambiar de agente inicia otra conversación.
+
+**Iniciar sesión** utiliza el acceso web del agente cuando está disponible:
+Codex mediante su servidor oficial, Copilot mediante `login --web-flow` y Claude
+mediante `claude auth login`. Otros adaptadores utilizan su método ACP anunciado.
+Si el proveedor no ofrece ese flujo, configura su clave API y, para agentes nativos,
+la variable de credencial correspondiente. El botón se oculta cuando Codex confirma
+una sesión autenticada. Un método ACP que exige una terminal puede no permitir acceso
+web desde el chat; se puede usar una clave API admitida por el proveedor.
+
+Cada perfil tiene su directorio privado bajo `$XDG_DATA_HOME/nexuterm/agents/`.
+Su autenticación y extensiones no se comparten con otros perfiles ni se copian desde
+la configuración global: los perfiles nuevos pueden requerir iniciar sesión otra vez.
+Las claves introducidas en NexuTerm permanecen en memoria salvo que se guarden
+explícitamente en el llavero del sistema. JSON solo conserva la referencia.
+No introduzcas secretos en argumentos ni en el JSON de extensiones. HTTP solo está
+permitido en loopback; el resto requiere HTTPS con validación TLS.
+
+Con **Acceso a terminales** activado, los agentes compatibles reciben herramientas
+para listar terminales abiertas, leer su pantalla y enviar comandos. Pueden elegir
+la última terminal activa o una sesión concreta, local o SSH. Leer o ejecutar exige
+aprobación gráfica con el agente, destino y operación. Los comandos se envían a la
+sesión existente: la confirmación indica que se han enviado, no que hayan terminado
+correctamente. Las API compatibles reciben estas herramientas como funciones;
+los agentes nativos las reciben mediante un servidor MCP privado.
+
+### Iniciar sesión en Codex con ChatGPT
+
+En la paleta pulsa **Iniciar sesión web en Codex**. El chat consulta la cuenta
+mediante `account/read` del servidor oficial. Si ya existe una sesión de ChatGPT,
+la reutiliza sin abrir el navegador. En otro caso solicita el acceso web a Codex
+y abre su URL en el navegador predeterminado; **Detener** cancela la operación.
+Puedes escribir directamente en el chat después de autenticarte. **Ctrl+Intro**
+envía el mensaje; las aprobaciones aparecen como diálogos con la operación que
+se solicita autorizar. Cerrar un diálogo rechaza la operación.
+
+Se utiliza el perfil seleccionado y su directorio privado. NexuTerm no lee ni
+copia `auth.json` ni guarda tokens OAuth en `sessions.json`. Codex administra su
+sesión mediante el `CODEX_HOME` exclusivo del perfil.
+
+La cabecera reúne nueva conversación, historial, detener y ajustes. **Chats
+recientes** consulta las conversaciones de la carpeta del perfil y permite
+recuperarlas. En el editor inferior, **+** añade archivos o carpetas como rutas de
+contexto; puedes quitarlas antes de enviar. Codex decide si necesita leerlas y
+aplica sus permisos. El selector de modelos consulta `model/list`; el de
+razonamiento muestra los niveles admitidos por el modelo. La elección se envía
+con el siguiente mensaje. Los permisos se eligen antes del primer mensaje y
+quedan fijados durante la conversación.
+
+El micrófono ofrece dictado local con PipeWire (`pw-record`) y
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp). Este checkout tiene una
+instalación opcional en `.local/whisper`: ejecutable `bin/whisper-cli` y modelo
+multilingüe `models/ggml-tiny.bin` (unos 78 MB). NexuTerm la detecta automáticamente
+cuando no has configurado otro motor; esta carpeta está excluida de Git y no se
+elimina al limpiar `target`. No modifica la configuración global del equipo.
+
+El idioma inicial es español. En **Configurar agentes de IA → General →
+Configurar dictado local…** puedes elegir detección automática, otro ejecutable
+o modelo. Si falta el motor, el micrófono abre ese mismo diálogo. La aplicación
+no descarga modelos automáticamente. Pulsa el micrófono para grabar y otra vez
+para terminar; el máximo es un minuto. El texto se añade al borrador para
+revisarlo antes de enviar y el audio temporal se elimina al terminar. El audio
+no se envía a una API. Tiny prioriza tamaño y recursos; puede cometer errores,
+especialmente con ruido o frases muy breves.
+
+El chat todavía no reproduce todas las funciones de VS Code: las solicitudes
+de herramientas no admitidas se rechazan; no incluye los complementos, dibujo
+ni objetivos que aparecen en el menú de esa extensión.
+
+Si el navegador o su retorno local no funcionan, el CLI también ofrece
+`codex login --device-auth`. Consulta la
+[documentación oficial de autenticación](https://learn.chatgpt.com/docs/auth).
+
+### MCP, skills, agentes y subagentes por perfil
+
+La pestaña **MCP, skills y agentes** pertenece al agente editado. Sus botones añaden
+plantillas JSON que se validan al guardar. Los servidores MCP se crean desactivados;
+configúralos y actívalos explícitamente. Las skills referencian carpetas con `SKILL.md`;
+NexuTerm no descarga paquetes. Los agentes incluyen nombre, descripción, instrucciones,
+modo principal o subagente y modelo opcional.
+
+OpenCode recibe su configuración nativa por proceso; Codex recibe `config.toml`,
+skills y archivos de agentes en su perfil privado. Claude y Gemini reciben directorios
+privados de skills y agentes. La ejecución de estas extensiones depende del adaptador;
+las API de texto no ejecutan por sí mismas skills ni subagentes. No se escriben archivos
+globales ni del proyecto. Inicia otra conversación para aplicar cambios de configuración.
+
+Comprobaciones reproducibles, con datos ficticios y sin llamar a modelos reales:
+
+```bash
+cargo test --locked
+python3 lab/check_ai.py
+```
+
+La comprobación GTK usa `xvfb-run` si existe o el `DISPLAY` actual y crea una sesión
+D-Bus independiente. Guarda capturas y logs en `artifacts/`.
 
 ## Compilar y ejecutar
 
@@ -33,11 +173,12 @@ Debian/Ubuntu (paquetes de desarrollo para compilar):
 sudo apt update
 sudo apt install build-essential pkg-config libglib2.0-dev-bin libgtk-4-dev libvte-2.91-gtk4-dev \
     libadwaita-1-dev libvncserver-dev libsecret-1-dev libssl-dev \
-    openssh-client gvfs-backends dbus-user-session freerdp3-x11 tigervnc-viewer
+    openssh-client inetutils-telnet curl gvfs-backends dbus-user-session
 ```
 
-En versiones que distribuyen FreeRDP 2, el paquete puede llamarse `freerdp2-x11`; NexuTerm busca `xfreerdp3` y `xfreerdp`.
-VNC busca `vncviewer` o `xtigervncviewer`. GTK/VTE y sus paquetes de desarrollo tienen nombres distintos en otras distribuciones.
+RDP usa IronRDP compilado dentro del ejecutable y las bibliotecas TLS del sistema.
+VNC usa directamente LibVNCClient; el paquete de release incluye su dependencia de biblioteca.
+GTK/VTE y sus paquetes de desarrollo tienen nombres distintos en otras distribuciones.
 
 ```bash
 cd ~/source/NexuTerm
@@ -50,39 +191,69 @@ Para otras máquinas, instala Rust desde [rust-lang.org](https://rust-lang.org/t
 
 ### Instalación en el escritorio Linux
 
+La distribución recomendada para Debian/Ubuntu es un paquete `.deb` con sus
+dependencias declaradas. Prepararlo requiere Python >= 3.11, `dpkg-dev` y `binutils`:
+
 ```bash
-make build
-sudo make install
+sudo apt install python3 dpkg-dev binutils
+make release
+sudo apt install ./dist/nexuterm_*.deb
 ```
 
-Instala el binario, el lanzador del menú de aplicaciones y el logo de `logo/NexuTerm.png`
-en `/usr/local`. El logo también queda integrado en el ejecutable y en **Acerca de NexuTerm**.
+`make release` compila la versión optimizada y genera el `.deb` en `dist/`.
+APT instala OpenSSH, el cliente Telnet, el soporte FTP de GVfs y curl para Windows CE, un proveedor de llavero (GNOME Keyring o KeePassXC), LibVNCClient y las bibliotecas necesarias, incluidas sus
+dependencias transitivas. `dpkg-shlibdeps` calcula las bibliotecas y versiones
+mínimas a partir del ejecutable; se respetan además los mínimos de GTK, VTE y libadwaita.
+No uses únicamente `dpkg -i`: no descarga las dependencias que falten.
+
+El paquete instala el programa en `/usr/bin`, junto con el lanzador y el logo.
+Para empaquetar un binario ya compilado, usa `make package BINARY=target/release/nexuterm`.
+El `.deb` necesita acceso a los repositorios de APT al instalarse; no es un paquete
+autónomo sin conexión ni garantiza compatibilidad con distribuciones más antiguas.
+Constrúyelo en la distribución más antigua que quieras soportar. Si APT no puede
+satisfacer las versiones de las bibliotecas, rechazará la instalación.
+
+`cargo build --release` y `make build` solo compilan: no instalan los clientes
+externos. Para comprobar un equipo donde ejecutes el binario directamente:
+
+```bash
+make check-runtime
+```
+
+Alternativamente, `make build && sudo make install` instala en `/usr/local`,
+pero comprueba antes los clientes SSH y Telnet, el backend FTP de GVfs y las bibliotecas enlazadas y falla
+si falta alguno. No instala paquetes del sistema por su cuenta. RDP y VNC no requieren instalar visores externos.
+El logo también queda integrado en el ejecutable y en **Acerca de NexuTerm**.
 Para una instalación sin privilegios usa `make install PREFIX="$HOME/.local"`
-(incluye `~/.local/bin` en tu PATH). Para preparar un paquete, usa `DESTDIR`.
+(incluye `~/.local/bin` en tu PATH). `DESTDIR` permite preparar un árbol de instalación
+sin comprobar los clientes del equipo constructor; sus dependencias deben resolverse
+en el equipo de destino mediante el paquete `.deb`.
 La instalación registra el lanzador en el menú; no copia accesos directos al escritorio personal.
 
 ## Uso
 
-1. Pulsa el icono de servidor (**Nueva conexión**, Ctrl+N) y selecciona SSH, RDP o VNC; ajusta host, puerto y usuario.
-2. Guarda y pulsa **Conectar**. SSH abre una terminal; RDP/VNC abren el visor correspondiente y conservan una pestaña de diagnóstico.
+1. Pulsa el icono de servidor (**Nueva conexión**, Ctrl+N) y selecciona SSH, RDP, VNC, Telnet, FTP o SFTP. El formulario muestra los campos del protocolo: usuario, clave y salto para SSH/SFTP; usuario y dominio para RDP; usuario y contraseña para FTP; servidor y puerto para VNC, con usuario opcional si el servidor lo requiere. Al cambiar de tipo se conserva el puerto escrito para cada protocolo. Grupo y favorito están en **Organización (opcional)**.
+2. Guarda y pulsa **Conectar**. Telnet abre una terminal. FTP y SFTP abren un explorador gráfico local/remoto; selecciona archivos y utiliza **Subir** o **Descargar**. Las carpetas se abren con doble clic. SFTP solicita contraseña o frase de paso mediante una ventana gráfica cuando sea necesario. SSH abre una terminal; VNC abre el escritorio dentro de una pestaña y solicita la contraseña al pulsar **Conectar**. RDP también se abre dentro de una pestaña; introduce el usuario y la contraseña y pulsa **Conectar**. Para una CA privada, indica su archivo PEM en la pestaña; el certificado debe corresponder al nombre o IP del servidor.
 3. Al abrir SSH aparece automáticamente **Archivos remotos**. Completa la autenticación y la comprobación de identidad en la terminal; el panel reutiliza esa conexión sin pedir otra contraseña. Doble clic abre una carpeta; también puedes escribir una ruta y pulsar Enter.
 4. El icono **Subir archivo** permite elegir un archivo local. Para descargar, selecciona un archivo remoto y pulsa **Descargar**, o haz doble clic. Elige un nombre de destino que no exista: esta entrega no sobrescribe archivos existentes.
 5. Copiar/pegar en terminal: **Ctrl+Shift+C / Ctrl+Shift+V**. El terminal interpreta los bytes pegados como cualquier shell interactiva.
 6. Abre **☰ → Administrar sesiones** o pulsa **Ctrl+Mayús+S** para mantener los perfiles. El icono de lista de la cabecera abre la misma ventana. Usa el menú principal para dividir la terminal activa, buscar (Ctrl+Shift+F), ajustar el zoom y abrir preferencias. Ctrl+Shift+T crea una terminal local; Ctrl+O abre el editor.
 
+Si RDP presenta un certificado autofirmado, se muestra el servidor, el titular, la validez y la huella SHA-256 antes de autenticar. Comprueba la huella por otro medio con el administrador y elige **Confiar solo esta sesión** si coincide. **Cancelar** es la opción predeterminada. La confianza no se guarda: cada conexión sin una CA válida requiere confirmación. No se envía la contraseña hasta aceptar el certificado mostrado en esa misma conexión TLS.
+
 El navegador utiliza **SFTP sobre SSH**, como el panel SSH de MobaXterm; no invoca el protocolo SCP clásico. Terminal y archivos comparten un socket de control propio y privado. Si no hay conexión autenticada, el navegador espera o permite reintentar; no inicia una conexión independiente ni modifica `~/.ssh/config`.
 
-El lateral de conexiones se oculta al abrir una sesión SSH para dejar espacio al navegador remoto; F9 permite volver a mostrarlo. Cada pestaña SSH conserva su propio navegador y ruta. La navegación manual no sigue automáticamente los cambios de carpeta del shell.
+Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones guardadas en el panel lateral. Al seleccionar otra clase de pestaña, vuelve la lista de conexiones. F9 muestra u oculta el lateral. Cada pestaña SSH conserva su propio navegador y ruta. La navegación manual no sigue automáticamente los cambios de carpeta del shell.
 
 ## Límites conocidos
 
-- La ampliación profesional sigue incompleta: ejecución simultánea, gestor de túneles, panel de métricas, llavero e integración RDP/VNC todavía no están conectados a la interfaz. Los módulos de backend en desarrollo no equivalen a funciones aceptadas.
-- No hay todavía incrustación de los escritorios RDP/VNC dentro de GTK, ni pruebas reales de login contra servidores remotos.
-- La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los clientes externos.
+- La ampliación profesional sigue incompleta: ejecución simultánea, gestor de túneles, panel de métricas, todavía no están conectados a la interfaz. Los módulos de backend en desarrollo no equivalen a funciones aceptadas.
+- RDP y VNC se ajustan al área de la pestaña sin cambiar la resolución del servidor. No hay aún sincronización de portapapeles, audio ni configuración de certificados VNC personalizados. La compatibilidad con todos los servidores reales no está comprobada.
+- La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los protocolos de escritorio remoto.
 - No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares, importación de perfiles MobaXterm ni todas sus herramientas.
-- El explorador transfiere un archivo cada vez, no árboles de carpetas. No sigue enlaces simbólicos automáticamente. No sobrescribe archivos existentes y un error/cancelación puede dejar un destino parcial. Cancelar detiene nuevas solicitudes y espera la operación ya enviada; no revierte los bytes escritos. Se usan bloques de 64 KiB y listados de hasta 200 entradas por página.
+- El explorador transfiere un archivo cada vez, no árboles de carpetas. No sigue enlaces simbólicos automáticamente. No sobrescribe archivos existentes y un error/cancelación puede dejar un destino parcial. Cancelar detiene nuevas solicitudes y espera la operación ya enviada; no revierte los bytes escritos. SFTP usa bloques de 64 KiB y los listados muestran hasta 200 entradas por página. El modo FTP Windows CE admite listados de hasta 8 MiB; comprueba que el destino remoto no exista antes de subir, pero FTP no garantiza exclusión frente a escrituras simultáneas de otros clientes.
 - El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. No guarda cuando el backend no ofrece etag. No hay resaltado de sintaxis todavía.
-- No hay almacén propio de secretos; se utilizan los diálogos y agentes de los backends. No se debilita la validación de certificados ni de host keys.
+- Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; la compatibilidad con listados Windows CE utiliza curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.
 - Cerrar una terminal envía SIGHUP al grupo del proceso PTY y destruye el terminal; procesos deliberadamente desacoplados no quedan bajo supervisión de la app.
 - El binario compilado en una distribución reciente no garantiza compatibilidad con glibc más antigua. Construir en la base más antigua soportada antes de distribuir.
 
@@ -92,7 +263,10 @@ El lateral de conexiones se oculta al abrir una sesión SSH para dejar espacio a
 cargo test --locked
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
+python3 -m unittest discover -s tests -p test_release.py
 python3 lab/check_ui.py menus
+python3 lab/check_vnc.py
+python3 lab/check_vnc.py --password
 ```
 
 La prueba de menús requiere una compilación de desarrollo (`cargo build --locked`),
