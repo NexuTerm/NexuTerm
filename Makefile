@@ -2,10 +2,24 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 CARGO ?= cargo
 BINARY ?= target/release/nexuterm
+PYTHON ?= python3
 
-.PHONY: build install
+.PHONY: build release package check-runtime install
 build:
 	$(CARGO) build --locked --release
+
+release: build
+	$(MAKE) package
+
+package:
+	$(PYTHON) packaging/release.py deb --binary "$(BINARY)"
+
+check-runtime:
+	$(PYTHON) packaging/release.py check --binary "$(BINARY)"
+
+ifeq ($(strip $(DESTDIR)),)
+install: check-runtime
+endif
 
 # Run make build first. DESTDIR allows packaging without changing the system.
 install:
