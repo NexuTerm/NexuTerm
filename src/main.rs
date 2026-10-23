@@ -12,6 +12,8 @@ mod ui;
 use gtk::{glib, prelude::*};
 
 fn main() -> glib::ExitCode {
+    let args:Vec<String>=std::env::args().collect();
+    if args.get(1).is_some_and(|a|a=="--terminal-mcp"){return if args.len()==4&&nexuterm::terminal_mcp::stdio(&args[2],&args[3])==0{glib::ExitCode::SUCCESS}else{glib::ExitCode::FAILURE};}
     gtk::gio::resources_register_include!("nexuterm.gresource")
         .expect("No se pudo registrar el icono de NexuTerm");
     if std::env::var_os("NEXUTERM_ASKPASS").is_some() {

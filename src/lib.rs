@@ -1,3 +1,15 @@
+#[cfg(feature="gui")]
+pub mod terminal_mcp;
+#[cfg(feature="gui")]
+pub mod agent_profile;
+#[cfg(feature="gui")]
+mod agent_runtime;
+#[cfg(feature = "gui")]
+pub mod dictation;
+#[cfg(feature = "gui")]
+pub mod codex;
+pub mod ai;
+pub mod ai_config;
 pub mod config;
 pub mod connection;
 pub mod desktop;

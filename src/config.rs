@@ -43,6 +43,9 @@ pub struct Profile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
+    pub dictation_program: String,
+    pub dictation_model: String,
+    pub dictation_language: String,
     pub theme: String,
     pub font: String,
     pub color_scheme: String,
@@ -54,6 +57,9 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            dictation_program: "whisper-cli".into(),
+            dictation_model: String::new(),
+            dictation_language: "es".into(),
             theme: "system".into(),
             font: "Monospace 11".into(),
             color_scheme: "dark".into(),
@@ -77,9 +83,116 @@ pub struct Tunnel {
     pub destination_port: u16,
 }
 
+/// AI credentials are stored separately; this schema contains only a reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiAgent {
+    pub id: String,
+    pub name: String,
+    pub kind: crate::ai_config::AiKind,
+    pub program: String,
+    pub args: Vec<String>,
+    pub directory: String,
+    pub endpoint: String,
+    pub model: String,
+    pub models: Vec<String>,
+    pub credential_env:String,
+    #[serde(skip)]
+    pub wait_credentials:bool,
+    pub terminal_access: bool,
+    #[serde(skip)]
+    pub terminal_socket: Option<String>,
+    #[serde(skip)]
+    pub runtime_root:Option<PathBuf>,
+    pub system_prompt: String,
+    pub max_output_tokens: u32,
+    pub timeout_seconds: u32,
+    pub secret_ref: Option<String>,
+    #[serde(rename="extensions", alias="opencode")]
+    pub opencode: crate::ai_config::OpenCodeConfig,
+}
+impl Default for AiAgent {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            kind: Default::default(),
+            program: String::new(),
+            args: Vec::new(),
+            directory: String::new(),
+            endpoint: String::new(),
+            model: String::new(),
+            models: Vec::new(),
+            credential_env:String::new(),
+            wait_credentials:false,
+            terminal_access: true,
+            terminal_socket: None,
+            runtime_root:None,
+            system_prompt: String::new(),
+            max_output_tokens: 2048,
+            timeout_seconds: 120,
+            secret_ref: None,
+            opencode: Default::default(),
+        }
+    }
+}
+impl AiAgent {
+    pub fn is_codex(&self) -> bool {
+        self.kind == crate::ai_config::AiKind::Codex
+            || (self.kind == crate::ai_config::AiKind::Local
+                && Path::new(&self.program).file_name()
+                    .is_some_and(|name| name == "codex" || name == "codex.exe"))
+    }
+
+    pub fn credential_key(&self) -> (String, String) {
+        (
+            self.id.clone(),
+            if self.kind.is_api(){self.endpoint.trim_end_matches('/').to_owned()}else{format!("native:{}",self.credential_env)},
+        )
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if !["","OPENAI_API_KEY","ANTHROPIC_API_KEY","GEMINI_API_KEY","DEEPSEEK_API_KEY","OPENCODE_API_KEY","COPILOT_GITHUB_TOKEN","GH_TOKEN"].contains(&self.credential_env.as_str()){return Err("Variable de credencial no admitida".into());}
+        if self.id.is_empty() || self.name.trim().is_empty() {
+            return Err("Indica un nombre para el agente".into());
+        }
+        if self.models.len()>128 || self.models.iter().any(|m|m.trim().is_empty()||m.len()>256||m.chars().any(char::is_control)){return Err("Lista de modelos inválida (máximo 128)".into());}
+        if self.kind.is_api() {
+            crate::ai_config::validate_url(&self.endpoint)?;
+            if self.model.len() > 256
+                || self.model.chars().any(|c| c.is_control())
+            {
+                return Err("Indica un modelo válido".into());
+            }
+            if !(1..=32768).contains(&self.max_output_tokens)
+                || !(5..=600).contains(&self.timeout_seconds)
+                || self.system_prompt.len() > 32768
+            {
+                return Err("Límites de API fuera de rango".into());
+            }
+        } else {
+            if self.program.trim().is_empty()
+                || self.program.starts_with('-')
+                || self.program.contains('\0')
+                || self.directory.contains('\0')
+                || self.args.iter().any(|a| a.contains('\0'))
+                || self.model.contains('\0')
+            {
+                return Err("Ejecutable, argumentos o carpeta inválidos".into());
+            }
+            if !self.directory.is_empty() && !Path::new(&self.directory).is_absolute() {
+                return Err("La carpeta de trabajo debe ser una ruta absoluta".into());
+            }
+        }
+        self.opencode.validate()?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub ai_agents: Vec<AiAgent>,
     pub version: u32,
     pub profiles: Vec<Profile>,
     #[serde(default)]
@@ -94,6 +207,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: 2,
+            ai_agents: Vec::new(),
             profiles: Vec::new(),
             preferences: Preferences::default(),
             tunnels: Vec::new(),
@@ -146,6 +260,13 @@ pub fn load(path: &Path) -> Result<Config, String> {
     }
     for profile in &config.profiles {
         crate::connection::validate(profile)?;
+    }
+    let mut agent_ids = std::collections::HashSet::new();
+    for agent in &config.ai_agents {
+        agent.validate()?;
+        if !agent_ids.insert(&agent.id) {
+            return Err("Identificador de agente duplicado".into());
+        }
     }
     let needs_upgrade = config.version == 1;
     let mut ids = std::collections::HashSet::new();
@@ -233,6 +354,46 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ai_agents_are_optional_and_roundtrip() {
+        let legacy: Config = serde_json::from_str(r#"{"version":2,"profiles":[]}"#).unwrap();
+        assert!(legacy.ai_agents.is_empty());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut config = legacy;
+        config.ai_agents.push(AiAgent {
+            id: "local-test".into(),
+            name: "Test".into(),
+            program: "/usr/bin/example".into(),
+            args: vec!["a b".into(), "$(not-a-shell)".into()],
+            directory: "/tmp".into(),
+            ..AiAgent::default()
+        });
+        save(&path, &config).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.ai_agents[0].args, config.ai_agents[0].args);
+        config.ai_agents.push(config.ai_agents[0].clone());
+        save(&path, &config).unwrap();
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn ai_agents_reject_invalid_fields_and_credentials() {
+        let mut agent = AiAgent {
+            id: "test".into(),
+            name: "Test".into(),
+            program: "tool".into(),
+            ..AiAgent::default()
+        };
+        assert!(agent.validate().is_ok());
+        agent.directory = "relative".into();
+        assert!(agent.validate().is_err());
+        agent.directory.clear();
+        agent.args.push("bad\0argument".into());
+        assert!(agent.validate().is_err());
+        assert!(serde_json::from_str::<AiAgent>(r#"{"api_key":"not-a-real-key"}"#).is_err());
+    }
+
     #[test]
     fn persists_basic_protocol_profiles() {
         let directory = tempfile::tempdir().unwrap();
