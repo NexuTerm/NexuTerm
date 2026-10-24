@@ -439,6 +439,16 @@ pub fn build(app: &gtk::Application) {
     });
     local_terminal(&state);
     #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+        let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
+        connect_profile(&state, &window, &Profile {
+            id: "remote-editor-fixture".into(), name: "SSH editor fixture".into(), protocol: Protocol::Ssh,
+            host: "127.0.0.1".into(), port: std::env::var("NEXUTERM_REMOTE_FIXTURE_PORT").unwrap().parse().unwrap(),
+            username: std::env::var("NEXUTERM_REMOTE_FIXTURE_USER").unwrap(),
+            identity: root.join("client").to_string_lossy().into(), ..Profile::default()
+        });
+    }
+    #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some()
         && let Ok(value) = std::env::var("NEXUTERM_SMOKE_BASIC")
         && let Some((kind, port)) = value.split_once(':')
@@ -694,7 +704,8 @@ pub fn build(app: &gtk::Application) {
             20
         } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals")) {
             10
-        } else if std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
+        } else if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
             8
         } else {
             3
@@ -1069,6 +1080,15 @@ fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: 
                 ],
             );
         }
+    }
+    #[cfg(debug_assertions)]
+    if profile.id == "remote-editor-fixture" && std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+        let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
+        spec.args.splice(0..0, ["-F".into(), "/dev/null".into(), "-o".into(),
+            format!("UserKnownHostsFile={}", root.join("known_hosts").display()),
+            "-o".into(), "StrictHostKeyChecking=yes".into(), "-o".into(), "BatchMode=yes".into(),
+            "-o".into(), "IdentitiesOnly=yes".into()]);
+        spec.args.push("/bin/sleep 30".into());
     }
     if profile.protocol == Protocol::Sftp {
         let page = gtk::Box::new(gtk::Orientation::Vertical, 4);

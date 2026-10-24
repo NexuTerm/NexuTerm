@@ -25,6 +25,26 @@ pub fn choose_editor(state: &Rc<State>, window: &gtk::ApplicationWindow) {
 }
 
 pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::File) {
+    editor_document(state, window, file, None);
+}
+pub fn remote_editor(
+    state: &Rc<State>,
+    window: &gtk::ApplicationWindow,
+    remote: std::sync::Arc<nexuterm::remote_edit::RemoteDocument>,
+) {
+    editor_document(
+        state,
+        window,
+        gio::File::for_path(remote.local_path()),
+        Some(remote),
+    );
+}
+fn editor_document(
+    state: &Rc<State>,
+    window: &gtk::ApplicationWindow,
+    file: gio::File,
+    remote: Option<std::sync::Arc<nexuterm::remote_edit::RemoteDocument>>,
+) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("nexuterm-section");
     root.add_css_class("modern-editor");
@@ -39,6 +59,14 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
     badge.set_hexpand(true);
     badge.set_xalign(0.0);
     badge.add_css_class("heading");
+    if let Some(remote) = &remote {
+        badge.set_text(&format!("SSH / {}", remote.host()));
+        badge.set_tooltip_text(Some(&format!(
+            "{} · copia temporal: {}",
+            remote.remote_path().display(),
+            remote.local_path().display()
+        )));
+    }
     toolbar.append(&badge);
     toolbar.append(&save);
     root.append(&toolbar);
@@ -138,7 +166,14 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
     let close = gtk::Button::from_icon_name("window-close-symbolic");
     header.append(&close);
     let page = state.notebook.append(&root);
-    page.set_title(&title);
+    page.set_title(&if let Some(remote) = &remote {
+        format!("{title} @ {}", remote.host())
+    } else {
+        title.clone()
+    });
+    if let Some(remote) = &remote {
+        page.set_tooltip(&remote.remote_path().to_string_lossy());
+    }
     state.notebook.set_selected_page(&page);
     let target = page.downgrade();
     let close_button = close.clone();
@@ -193,24 +228,122 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
     let b = busy.clone();
     let l = loaded.clone();
     let st = status.downgrade();
-    save.connect_clicked(move|button|{
-        if b.replace(true)||!l.get(){return;}
-        let Some(buffer)=buf.upgrade()else{b.set(false);return;};
-        let contents=buffer.text(&buffer.start_iter(),&buffer.end_iter(),true).to_string();
-        if contents.len()>EDIT_LIMIT{b.set(false);if let Some(s)=st.upgrade(){s.set_text("El documento supera el límite de 8 MiB");}return;}
-        let file=file_save.clone();let expected=tag.borrow().clone();let tag=tag.clone();let b=b.clone();let st=st.clone();let button=button.downgrade();let buf=buffer.downgrade();
-        if let Some(button)=button.upgrade(){button.set_sensitive(false);}
-        glib::spawn_future_local(async move{
-            match file.replace_contents_future(contents.clone().into_bytes(),expected.as_deref(),false,gio::FileCreateFlags::NONE).await {
-                Ok((_,new_tag))=>{
-                    *tag.borrow_mut()=new_tag.map(|s|s.into());
-                    if let Some(buffer)=buf.upgrade() && buffer.text(&buffer.start_iter(),&buffer.end_iter(),true).as_str()==contents{buffer.set_modified(false);}
-                    if let Some(s)=st.upgrade(){s.set_text("Guardado. La próxima escritura comprobará la versión remota.");}
-                },Err((_,e))=>{if let Some(s)=st.upgrade(){s.set_text(&format!("No se guardó: {e}. Si cambió fuera del editor, vuelve a abrirlo y compara antes de guardar."));}}
+    save.connect_clicked(move |button| {
+        if b.get() || !l.get() {
+            return;
+        }
+        let Some(buffer) = buf.upgrade() else {
+            return;
+        };
+        let contents = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .to_string();
+        if contents.len() > EDIT_LIMIT {
+            if let Some(status) = st.upgrade() {
+                status.set_text("El documento supera el límite de 8 MiB");
             }
-            b.set(false);if let Some(button)=button.upgrade(){button.set_sensitive(tag.borrow().is_some());}
+            return;
+        }
+        b.set(true);
+        button.set_sensitive(false);
+        let file = file_save.clone();
+        let expected = tag.borrow().clone();
+        let tag = tag.clone();
+        let busy = b.clone();
+        let status = st.clone();
+        let button = button.downgrade();
+        let buffer = buffer.downgrade();
+        let remote = remote.clone();
+        if let Some(status) = status.upgrade() {
+            status.set_text(if remote.is_some() {
+                "Guardando copia temporal y subiendo por SCP…"
+            } else {
+                "Guardando…"
+            });
+        }
+        glib::spawn_future_local(async move {
+            let result = async {
+                let (_, new_tag) = file
+                    .replace_contents_future(
+                        contents.clone().into_bytes(),
+                        expected.as_deref(),
+                        false,
+                        gio::FileCreateFlags::NONE,
+                    )
+                    .await
+                    .map_err(|(_, e)| e.to_string())?;
+                *tag.borrow_mut() = new_tag.map(String::from);
+                if let Some(remote) = remote.as_ref() {
+                    let document = remote.clone();
+                    let text = contents.clone();
+                    nexuterm::runtime::runtime()
+                        .spawn(async move { document.save(text).await })
+                        .await
+                        .map_err(|e| e.to_string())??;
+                }
+                Ok::<(), String>(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    if let Some(buffer) = buffer.upgrade()
+                        && buffer
+                            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+                            .as_str()
+                            == contents
+                    {
+                        buffer.set_modified(false);
+                    }
+                    if let Some(status) = status.upgrade() {
+                        status.set_text(if remote.is_some() {
+                            "Guardado por SCP y verificado en el servidor."
+                        } else {
+                            "Guardado con comprobación de versión."
+                        });
+                    }
+                    #[cfg(debug_assertions)]
+                    if remote.is_some()
+                        && std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+                    {
+                        eprintln!("NEXUTERM_SMOKE_REMOTE_SAVED_OK");
+                    }
+                }
+                Err(error) => {
+                    if let Some(status) = status.upgrade() {
+                        let copy = remote
+                            .as_ref()
+                            .map(|r| format!(" Copia local: {}", r.local_path().display()))
+                            .unwrap_or_default();
+                        status.set_text(&format!("No se guardó: {error}.{copy}"));
+                    }
+                }
+            }
+            busy.set(false);
+            if let Some(button) = button.upgrade() {
+                button.set_sensitive(tag.borrow().is_some());
+            }
         });
     });
+    let keys = gtk::EventControllerKey::new();
+    let save_key = save.downgrade();
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
+        if (key == gtk::gdk::Key::s || key == gtk::gdk::Key::S)
+            && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            && !modifiers
+                .intersects(gtk::gdk::ModifierType::SHIFT_MASK | gtk::gdk::ModifierType::ALT_MASK)
+        {
+            if let Some(save) = save_key.upgrade()
+                && save.is_sensitive()
+            {
+                save.emit_clicked();
+            }
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    #[cfg(debug_assertions)]
+    let save_keys = keys.downgrade();
+    root.add_controller(keys);
     let buf = buffer.downgrade();
     let view = text.downgrade();
     let save = save.downgrade();
@@ -244,6 +377,20 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
                     *etag.borrow_mut() = tag;
                     loaded.set(true);
                     status.set_text(if etag.borrow().is_some(){"UTF-8 · guardado con comprobación de versión"}else{"El servidor no aporta versión/etag: edición disponible, guardado deshabilitado para evitar sobrescrituras."});
+                    #[cfg(debug_assertions)]
+                    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+                        assert_eq!(contents, "def value():\n    return 1\n");
+                        buffer.set_text("def value():\n    return 42  # editado desde NexuTerm\n");
+                        let keys = save_keys.upgrade().unwrap();
+                        assert!(keys.emit_by_name::<bool>(
+                            "key-pressed",
+                            &[
+                                &gtk::gdk::Key::s,
+                                &0_u32,
+                                &gtk::gdk::ModifierType::CONTROL_MASK
+                            ]
+                        ));
+                    }
                 }
                 Err(e) => status.set_text(&format!("No se pudo abrir: {e}")),
             }

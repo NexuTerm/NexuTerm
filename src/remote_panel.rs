@@ -14,6 +14,8 @@ use std::{
 
 pub struct Panel {
     pub widget: gtk::Box,
+    state: std::rc::Weak<State>,
+    connection: RefCell<Option<Arc<SshConnection>>>,
     auth_area: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     local: RefCell<Option<std::rc::Weak<crate::file_browser::LocalPane>>>,
     #[cfg(debug_assertions)]
@@ -56,7 +58,9 @@ impl Panel {
         window: &gtk::ApplicationWindow,
         connection: Arc<SshConnection>,
     ) -> Rc<Self> {
-        Self::with_client(state, window, Client::start(connection))
+        let panel = Self::with_client(state, window, Client::start(connection.clone()));
+        *panel.connection.borrow_mut() = Some(connection);
+        panel
     }
     pub fn with_client(
         state: &Rc<State>,
@@ -93,6 +97,7 @@ impl Panel {
         widget.append(&path);
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
+        list.set_activate_on_single_click(false);
         list.add_css_class("navigation-sidebar");
         widget.append(
             &gtk::ScrolledWindow::builder()
@@ -124,6 +129,8 @@ impl Panel {
         state.writes.borrow_mut().push(Rc::downgrade(&writing));
         let panel = Rc::new(Self {
             widget,
+            state: Rc::downgrade(state),
+            connection: RefCell::new(None),
             auth_area: RefCell::new(None),
             local: RefCell::new(None),
             #[cfg(debug_assertions)]
@@ -204,6 +211,8 @@ impl Panel {
                     if e.directory {
                         let target = p.current.borrow().join(&e.name);
                         p.navigate(target);
+                    } else if e.regular && p.connection.borrow().is_some() {
+                        p.edit(p.current.borrow().join(&e.name));
                     } else {
                         p.download();
                     }
@@ -243,6 +252,11 @@ impl Panel {
             }
             glib::ControlFlow::Continue
         });
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR") {
+            panel.navigate(PathBuf::from(path).parent().unwrap().to_path_buf());
+            return panel;
+        }
         panel.navigate(".".into());
         panel
     }
@@ -382,6 +396,15 @@ impl Panel {
                 self.next.set_sensitive(more);
                 *self.entries.borrow_mut() = entries;
                 #[cfg(debug_assertions)]
+                if let Some(path) = std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR")
+                    && self.smoke_step.replace(1) == 0 {
+                    let path = PathBuf::from(path);
+                    let index = self.entries.borrow().iter().position(|e| Some(e.name.as_os_str()) == path.file_name()).unwrap();
+                    let row = self.list.row_at_index(index as i32).unwrap();
+                    self.list.select_row(Some(&row));
+                    self.list.emit_by_name::<()>("row-activated", &[&row]);
+                }
+                #[cfg(debug_assertions)]
                 if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some()
                     && std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
                 {
@@ -495,6 +518,28 @@ impl Panel {
             }
             _ => {}
         }
+    }
+    fn edit(self: &Rc<Self>, remote: PathBuf) {
+        if self.busy.get() { return; }
+        let Some(connection) = self.connection.borrow().clone() else { return; };
+        self.set_busy(true);
+        self.status.set_text("Descargando una copia temporal para editar…");
+        let panel = Rc::downgrade(self);
+        let task = nexuterm::runtime::runtime().spawn(nexuterm::remote_edit::RemoteDocument::open(connection, remote));
+        glib::spawn_future_local(async move {
+            let result = task.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let Some(panel) = panel.upgrade() else { return; };
+            panel.set_busy(false);
+            match result {
+                Ok(document) => {
+                    if let (Some(state), Some(window)) = (panel.state.upgrade(), panel.window.upgrade()) {
+                        panel.status.set_text("Copia temporal abierta; Guardar vuelve a subirla por SCP.");
+                        crate::files::remote_editor(&state, &window, document);
+                    }
+                }
+                Err(error) => panel.status.set_text(&format!("No se pudo editar: {error}")),
+            }
+        });
     }
     fn upload(self: &Rc<Self>) {
         if let Some(local) = self

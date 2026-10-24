@@ -3,6 +3,7 @@ use crate::{
     connection::{self, CommandSpec},
 };
 use openssh_sftp_client::{Sftp, SftpOptions};
+use std::os::unix::fs::PermissionsExt;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -33,6 +34,7 @@ impl SshConnection {
         connection::validate(&profile)?;
         let directory = tempfile::Builder::new()
             .prefix("nx-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {

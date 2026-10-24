@@ -19,3 +19,5 @@ pub mod runtime;
 pub mod ssh;
 pub mod transfer;
 pub mod vnc;
+
+pub mod remote_edit;
