@@ -5,9 +5,10 @@ Primera versión funcional en desarrollo: no es una réplica completa de MobaXte
 
 ## Primera versión
 
-- Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas reordenables.
-- Filtro de conexiones y lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
-- Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom, reconexión y desconexión desde el menú o la barra contextual.
+- Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas compactas y reordenables.
+- Explorador local predeterminado con un tercio del área disponible y proporción conservada al redimensionar (separador ajustable), vista de detalles Nombre/Tipo/Tamaño y filas alternas grises adaptadas al tema. Los paneles se alinean arriba y abajo, con 3 px entre ellos. La navegación y apertura están integradas en su cabecera, sin pie permanente de paginación o contador. Doble clic o Intro navega por carpetas y abre archivos. Sigue los cambios de carpeta de la terminal local activa mediante VTE o `/proc`; navegar por el explorador no ejecuta comandos en el shell. Las conexiones guardadas siguen disponibles en **Administrar sesiones**.
+- Lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
+- Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom y herramientas en la cabecera de la terminal. Reconexión, desconexión y archivos remotos están en **Conexiones**.
 - Cada división tiene una **×** para cerrar solo ese panel y su proceso. El panel restante ocupa el espacio disponible; para cerrar la última terminal usa la **×** de su pestaña.
 - Paletas de terminal adaptadas al tema: gris carbón en oscuro y marfil en claro, texto, cursor y selección coordinados y colores ANSI suaves. Se actualizan también en terminales abiertas al cambiar el tema del sistema. Las aplicaciones que fijan sus propios colores RGB conservan esos colores.
 - Terminal local mediante GTK4/VTE: PTY, Unicode, redimensionado y scrollback de 10.000 líneas.
@@ -17,10 +18,12 @@ Primera versión funcional en desarrollo: no es una réplica completa de MobaXte
 - SFTP independiente utiliza OpenSSH con clave, agente o contraseña solicitada en una ventana gráfica. No abre un shell remoto.
 - SSH mediante OpenSSH con usuario, puerto, clave y salto; contraseñas solicitadas en el PTY.
 - Navegador remoto automático en el lateral de la aplicación para cada sesión SSH: ruta editable, carpeta de inicio, carpeta superior, páginas de 200 entradas, subida/descarga de archivos, progreso y cancelación. Usa SFTP sobre la conexión OpenSSH compartida del terminal, con la misma autenticación, puerto, clave y salto.
-- Editor de texto mediante GIO, UTF-8 hasta 8 MiB, con comprobación etag antes de guardar y aviso de cambios sin guardar. El panel SFTP nuevo transfiere archivos; todavía no abre su editor remoto integrado.
+- Editor de texto con números de línea y cabecera moderna mediante GIO, UTF-8 hasta 8 MiB, con comprobación etag antes de guardar y aviso de cambios sin guardar. Resaltado por lenguaje (Python, Rust, C#, SQL y otros), con funciones, palabras clave, cadenas y comentarios diferenciados y colores adaptados al tema.
 - VNC integrado en una pestaña GTK: escritorio ajustado al área disponible, teclado, ratón y rueda, contraseña temporal y desconexión al cerrar la pestaña. No necesita Remmina ni otro visor.
 - RDP integrado mediante IronRDP: escritorio en una pestaña GTK, teclado, ratón, contraseña temporal y TLS con validación de certificado y nombre del servidor. No necesita FreeRDP ni Remmina.
 - Configuración XDG versionada, escritura atómica y archivo privado; no contiene campos de contraseña.
+
+En **Preferencias** puedes elegir abrir los archivos del explorador con la aplicación predeterminada del sistema en lugar del editor integrado, y mostrar u ocultar los números de línea (se aplica a nuevos editores). Por defecto se usa el editor integrado con numeración. Los archivos binarios o que no sean UTF-8 no se editan.
 
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
@@ -232,18 +235,42 @@ La instalación registra el lanzador en el menú; no copia accesos directos al e
 
 ## Uso
 
-1. Pulsa el icono de servidor (**Nueva conexión**, Ctrl+N) y selecciona SSH, RDP, VNC, Telnet, FTP o SFTP. El formulario muestra los campos del protocolo: usuario, clave y salto para SSH/SFTP; usuario y dominio para RDP; usuario y contraseña para FTP; servidor y puerto para VNC, con usuario opcional si el servidor lo requiere. Al cambiar de tipo se conserva el puerto escrito para cada protocolo. Grupo y favorito están en **Organización (opcional)**.
+1. Abre **Conexiones** y pulsa **+** (o usa Ctrl+N) y selecciona SSH, RDP, VNC, Telnet, FTP o SFTP. El formulario muestra los campos del protocolo: usuario, clave y salto para SSH/SFTP; usuario y dominio para RDP; usuario y contraseña para FTP; servidor y puerto para VNC, con usuario opcional si el servidor lo requiere. Al cambiar de tipo se conserva el puerto escrito para cada protocolo. Grupo y favorito están en **Organización (opcional)**.
 2. Guarda y pulsa **Conectar**. Telnet abre una terminal. FTP y SFTP abren un explorador gráfico local/remoto; selecciona archivos y utiliza **Subir** o **Descargar**. Las carpetas se abren con doble clic. SFTP solicita contraseña o frase de paso mediante una ventana gráfica cuando sea necesario. SSH abre una terminal; VNC abre el escritorio dentro de una pestaña y solicita la contraseña al pulsar **Conectar**. RDP también se abre dentro de una pestaña; introduce el usuario y la contraseña y pulsa **Conectar**. Para una CA privada, indica su archivo PEM en la pestaña; el certificado debe corresponder al nombre o IP del servidor.
 3. Al abrir SSH aparece automáticamente **Archivos remotos**. Completa la autenticación y la comprobación de identidad en la terminal; el panel reutiliza esa conexión sin pedir otra contraseña. Doble clic abre una carpeta; también puedes escribir una ruta y pulsar Enter.
-4. El icono **Subir archivo** permite elegir un archivo local. Para descargar, selecciona un archivo remoto y pulsa **Descargar**, o haz doble clic. Elige un nombre de destino que no exista: esta entrega no sobrescribe archivos existentes.
+4. El icono **Subir archivo** permite elegir un archivo local. Para descargar, selecciona un archivo remoto y pulsa **Descargar**. Elige un nombre de destino que no exista: las transferencias normales no sobrescriben archivos existentes. En SSH/SFTP, el doble clic en un archivo regular abre su edición remota.
 5. Copiar/pegar en terminal: **Ctrl+Shift+C / Ctrl+Shift+V**. El terminal interpreta los bytes pegados como cualquier shell interactiva.
-6. Abre **☰ → Administrar sesiones** o pulsa **Ctrl+Mayús+S** para mantener los perfiles. El icono de lista de la cabecera abre la misma ventana. Usa el menú principal para dividir la terminal activa, buscar (Ctrl+Shift+F), ajustar el zoom y abrir preferencias. Ctrl+Shift+T crea una terminal local; Ctrl+O abre el editor.
+6. Abre **☰ → Administrar sesiones** o pulsa **Ctrl+Mayús+S** para mantener los perfiles. Los iconos de carpeta y servidor de la cabecera alternan las paletas laterales de archivos y conexiones; en la paleta de conexiones están **+** y **Administrar sesiones**. Usa el menú principal para dividir la terminal activa, buscar (Ctrl+Shift+F), ajustar el zoom y abrir preferencias. Ctrl+Shift+T crea una terminal local; Ctrl+O abre el editor.
 
 Si RDP presenta un certificado autofirmado, se muestra el servidor, el titular, la validez y la huella SHA-256 antes de autenticar. Comprueba la huella por otro medio con el administrador y elige **Confiar solo esta sesión** si coincide. **Cancelar** es la opción predeterminada. La confianza no se guarda: cada conexión sin una CA válida requiere confirmación. No se envía la contraseña hasta aceptar el certificado mostrado en esa misma conexión TLS.
 
-El navegador utiliza **SFTP sobre SSH**, como el panel SSH de MobaXterm; no invoca el protocolo SCP clásico. Terminal y archivos comparten un socket de control propio y privado. Si no hay conexión autenticada, el navegador espera o permite reintentar; no inicia una conexión independiente ni modifica `~/.ssh/config`.
+El navegador utiliza **SFTP sobre SSH**, como el panel SSH de MobaXterm. Terminal y archivos comparten un socket de control propio y privado. Si no hay conexión autenticada, el navegador espera o permite reintentar; no inicia una conexión independiente ni modifica `~/.ssh/config`.
 
-Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones guardadas en el panel lateral. Al seleccionar otra clase de pestaña, vuelve la lista de conexiones. F9 muestra u oculta el lateral. Cada pestaña SSH conserva su propio navegador y ruta. La navegación manual no sigue automáticamente los cambios de carpeta del shell.
+Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones guardadas en el panel lateral. Al seleccionar otra clase de pestaña, vuelve el explorador local. F9 muestra u oculta el lateral. Cada pestaña SSH conserva su propio navegador y ruta. La navegación manual no sigue automáticamente los cambios de carpeta del shell.
+
+### Edición remota SSH/SFTP
+
+Doble clic en un archivo remoto regular descarga una copia a una carpeta temporal
+privada (0700, archivo 0600) y abre el editor integrado. **Guardar** o **Ctrl+S**
+escribe la copia local y la sube mediante el cliente `scp` de OpenSSH, reutilizando
+el socket autenticado del terminal; no vuelve a pedir la contraseña ni modifica tu
+configuración SSH. Se requiere el cliente OpenSSH moderno (9 o posterior), con
+SFTP en el servidor, igual que el explorador. El nombre y el destino originales se
+conservan, y la pestaña identifica el servidor. La opción de aplicaciones externas
+del explorador local no se aplica al guardado remoto.
+
+Antes de sobrescribir se compara el contenido remoto con la versión descargada.
+Si hay cambios externos o desconexión se mantiene el documento modificado y se
+indica la ruta de la copia temporal para recuperar o comparar el texto. Tras una
+subida correcta se verifica el contenido del servidor y se actualiza la versión
+esperada para el siguiente guardado. Las transferencias normales de archivos
+siguen rechazando sobrescrituras. El editor rechaza binarios, enlaces simbólicos,
+texto que no sea UTF-8 y archivos mayores de 8 MiB.
+
+SCP escribe sobre el archivo existente: una interrupción durante la transferencia
+puede dejarlo incompleto; conserva la copia local para recuperarlo. La comprobación
+previa detecta cambios desde la descarga, pero no bloquea a otros editores durante
+la subida. Cerrar y descartar el documento elimina su copia temporal.
 
 ## Límites conocidos
 
@@ -252,7 +279,7 @@ Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones
 - La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los protocolos de escritorio remoto.
 - No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares, importación de perfiles MobaXterm ni todas sus herramientas.
 - El explorador transfiere un archivo cada vez, no árboles de carpetas. No sigue enlaces simbólicos automáticamente. No sobrescribe archivos existentes y un error/cancelación puede dejar un destino parcial. Cancelar detiene nuevas solicitudes y espera la operación ya enviada; no revierte los bytes escritos. SFTP usa bloques de 64 KiB y los listados muestran hasta 200 entradas por página. El modo FTP Windows CE admite listados de hasta 8 MiB; comprueba que el destino remoto no exista antes de subir, pero FTP no garantiza exclusión frente a escrituras simultáneas de otros clientes.
-- El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. No guarda cuando el backend no ofrece etag. No hay resaltado de sintaxis todavía.
+- El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. No guarda cuando el backend no ofrece etag. El resaltado se procesa en segundo plano y está acotado al primer MiB y 65.536 segmentos de estilo; el resto sigue siendo editable como texto. Es resaltado sintáctico, sin análisis semántico ni servidor de lenguaje.
 - Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; la compatibilidad con listados Windows CE utiliza curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.
 - Cerrar una terminal envía SIGHUP al grupo del proceso PTY y destruye el terminal; procesos deliberadamente desacoplados no quedan bajo supervisión de la app.
 - El binario compilado en una distribución reciente no garantiza compatibilidad con glibc más antigua. Construir en la base más antigua soportada antes de distribuir.
@@ -265,6 +292,8 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 python3 -m unittest discover -s tests -p test_release.py
 python3 lab/check_ui.py menus
+python3 lab/check_local_explorer.py
+python3 lab/check_remote_editor.py
 python3 lab/check_vnc.py
 python3 lab/check_vnc.py --password
 ```
@@ -272,6 +301,16 @@ python3 lab/check_vnc.py --password
 La prueba de menús requiere una compilación de desarrollo (`cargo build --locked`),
 Xvfb y D-Bus. Repite la apertura y cierre de los diálogos desde el menú y comprueba
 que el desplegable se oculta y que el logo está disponible con configuración aislada.
+
+La prueba del explorador usa Xvfb y D-Bus con archivos y configuración temporales.
+Comprueba el ancho del lateral al ampliar/reducir la ventana, navegación, numeración en claro/oscuro y apertura externa mediante una
+aplicación MIME de prueba, incluyendo nombres con espacios y acentos. No cambia
+las aplicaciones predeterminadas del usuario.
+
+La prueba de edición remota crea un `sshd` desechable en loopback, claves propias
+y una carpeta privada temporal bajo HOME (para respetar StrictModes); verifica SCP
+real, permisos, conflictos, límites y el recorrido gráfico con resaltado. No usa
+servidores ni claves personales. Requiere `sshd`, `ssh-keygen`, `scp`, Xvfb y D-Bus.
 
 Pruebas de biblioteca sin la interfaz GTK (el backend VNC requiere libvncclient):
 
