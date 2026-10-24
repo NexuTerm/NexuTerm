@@ -156,12 +156,11 @@ fn handle(state: &Rc<State>, request: Request) {
     {
         glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
             fn click(widget: &gtk::Widget) -> bool {
-                if let Some(button) = widget.downcast_ref::<gtk::Button>() {
-                    if button.label().is_some_and(|s| s == "Permitir una vez") {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.label().is_some_and(|s| s == "Permitir una vez") {
                         button.emit_clicked();
                         return true;
                     }
-                }
                 let mut child = widget.first_child();
                 while let Some(widget) = child {
                     child = widget.next_sibling();

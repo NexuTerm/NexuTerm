@@ -10,17 +10,15 @@ use std::{
 use tokio::{io::AsyncReadExt, process::Command};
 /// Resolve the optional project-local engine without overwriting explicit settings.
 pub fn resolve_engine(program: &str, model: &str) -> (String, String) {
-    if program == "whisper-cli" && model.is_empty() {
-        if let Ok(executable) = std::env::current_exe() {
-            if let Some(folder) = executable.parent() {
+    if program == "whisper-cli" && model.is_empty()
+        && let Ok(executable) = std::env::current_exe()
+            && let Some(folder) = executable.parent() {
                 for ancestor in folder.ancestors().take(4) {
                     if let Some(engine) = local_engine(&ancestor.join(".local/whisper")) {
                         return engine;
                     }
                 }
             }
-        }
-    }
     (program.to_owned(), model.to_owned())
 }
 fn local_engine(root: &std::path::Path) -> Option<(String, String)> {
@@ -101,7 +99,7 @@ async fn transcribe_with(
     let size = std::fs::metadata(&audio)
         .map_err(|_| "No se grabó audio")?
         .len();
-    if size < 44 || size > 3_000_000 {
+    if !(44..=3_000_000).contains(&size) {
         return Err("El audio está vacío o supera el límite de un minuto".into());
     }
     let mut child = Command::new(program)

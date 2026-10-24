@@ -349,11 +349,10 @@ async fn acp(
     let mut mcp=agent.opencode.mcp.iter().filter_map(|(name,s)|match s {
   crate::ai_config::McpServer::Local{command,enabled:true,environment}=>Some(json!({"name":name,"command":command[0],"args":command[1..],"env":environment.iter().map(|(name,value)|json!({"name":name,"value":value})).collect::<Vec<_>>()})),
   crate::ai_config::McpServer::Remote{url,enabled:true,headers,..}=>Some(json!({"name":name,"type":"http","url":url,"headers":headers.iter().map(|(name,value)|json!({"name":name,"value":value})).collect::<Vec<_>>()})),_=>None}).collect::<Vec<_>>();
-    if agent.terminal_access {
-        if let (Some(socket), Ok(exe)) = (&agent.terminal_socket, std::env::current_exe()) {
+    if agent.terminal_access
+        && let (Some(socket), Ok(exe)) = (&agent.terminal_socket, std::env::current_exe()) {
             mcp.push(json!({"name":"nexuterm-terminals","command":exe,"args":["--terminal-mcp",socket,&agent.name],"env":[]}));
         }
-    }
     emit(
         &events,
         Event::Capabilities {
@@ -368,7 +367,8 @@ async fn acp(
          command=commands.recv()=>{activity=tokio::time::Instant::now();match command{
           Some(Command::Shutdown)|None=>return Ok(()),Some(Command::Credentials(_))=>{},
           Some(Command::Permissions(value))=>writable=value,
-          Some(Command::Login)=>{if pending.values().any(|m|m=="initialize") && web_login_command(&agent).is_none(){want_login=true;continue;}if let Some((program,args))=web_login_command(&agent){
+          Some(Command::Login)=>{if pending.values().any(|m|m=="initialize") && web_login_command(&agent).is_none(){want_login=true;continue;}
+                    if let Some((program,args))=web_login_command(&agent){
             busy.store(true,Ordering::Relaxed);
             let login=web_login(&program,&args,&root,&events);tokio::pin!(login);
             let result=tokio::select!{result=&mut login=>Some(result),command=commands.recv()=>match command{Some(Command::Interrupt)=>None,Some(Command::Shutdown)|None=>return Ok(()),_=>None}};
@@ -411,7 +411,7 @@ async fn acp(
              "model"=>{model_option=option["id"].as_str().unwrap_or("model").into();model_current=option["currentValue"].as_str().unwrap_or("").into();collect_options(&option["options"],&mut catalog);},
              "mode"=>{if let Some(options)=option["options"].as_array(){modes=options.iter().filter_map(|v|v["value"].as_str().map(String::from)).collect();}},_=>{}
             }}}
-            if catalog.is_empty(){if let Some(models)=result["models"]["availableModels"].as_array(){for m in models{if let Some(id)=m["modelId"].as_str(){catalog.push(json!({"model":id,"displayName":m["name"].as_str().unwrap_or(id),"supportedReasoningEfforts":[]}));}}}}
+            if catalog.is_empty()&& let Some(models)=result["models"]["availableModels"].as_array(){for m in models{if let Some(id)=m["modelId"].as_str(){catalog.push(json!({"model":id,"displayName":m["name"].as_str().unwrap_or(id),"supportedReasoningEfforts":[]}));}}}
             for model in configured_models(&agent){if !catalog.iter().any(|v|v["model"]==model["model"]){catalog.push(model);}}
             emit(&events,Event::Models(catalog)).await?;busy.store(false,Ordering::Relaxed);emit(&events,Event::Ready(true)).await?;
            },

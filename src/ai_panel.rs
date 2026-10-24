@@ -182,8 +182,8 @@ pub(super) fn install(
                 );
             }
             refreshing.set(false);
-            if had_profiles {
-                if let Some(index) = fresh.and_then(|i| order.borrow().iter().position(|&n| n == i))
+            if had_profiles
+                && let Some(index) = fresh.and_then(|i| order.borrow().iter().position(|&n| n == i))
                 {
                     if selector.selected() == index as u32 {
                         selector.notify("selected");
@@ -191,7 +191,6 @@ pub(super) fn install(
                         selector.set_selected(index as u32);
                     }
                 }
-            }
         })
     };
     refresh();
@@ -361,11 +360,10 @@ pub(super) fn install(
                     button.emit_clicked();
                 }
                 eprintln!("NEXUTERM_SMOKE_AI_SETTINGS_OPEN");
-            } else if !matches!(mode.as_str(), "credentials" | "keyring") {
-                if let Some(button) = start.upgrade() {
+            } else if !matches!(mode.as_str(), "credentials" | "keyring")
+                && let Some(button) = start.upgrade() {
                     button.emit_clicked();
                 }
-            }
         });
     }
     app.connect_shutdown(move |_| process.shutdown());

@@ -10,8 +10,7 @@ pub(super) fn button(state: &Rc<State>, composer: &gtk::TextView) -> gtk::Button
         "audio-input-microphone-symbolic",
         "Dictar por voz · configuración local si no está disponible",
     );
-    let active: Rc<RefCell<Option<(Arc<AtomicBool>, tokio::task::AbortHandle)>>> =
-        Rc::new(RefCell::new(None));
+    let active = Rc::new(RefCell::new(None::<(Arc<AtomicBool>, tokio::task::AbortHandle)>));
     let cancel = active.clone();
     button.connect_unrealize(move |_| {
         if let Some((stop, task)) = cancel.borrow_mut().take() {
@@ -173,13 +172,12 @@ pub(super) fn configure(state: &Rc<State>) {
         );
         let field = field.clone();
         chooser.connect_response(move |c, r| {
-            if r == gtk::ResponseType::Accept {
-                if let (Some(field), Some(path)) =
+            if r == gtk::ResponseType::Accept
+                && let (Some(field), Some(path)) =
                     (field.upgrade(), c.file().and_then(|f| f.path()))
                 {
                     field.set_text(&path.to_string_lossy());
                 }
-            }
             c.destroy();
         });
         chooser.show();

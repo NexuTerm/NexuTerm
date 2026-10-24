@@ -73,14 +73,13 @@ pub fn mcp(agent: &AiAgent) -> Value {
             _ => {}
         }
     }
-    if agent.terminal_access {
-        if let (Some(socket), Ok(exe)) = (&agent.terminal_socket, std::env::current_exe()) {
+    if agent.terminal_access
+        && let (Some(socket), Ok(exe)) = (&agent.terminal_socket, std::env::current_exe()) {
             servers.insert(
                 "nexuterm-terminals".into(),
                 json!({"command":exe,"args":["--terminal-mcp",socket,&agent.name]}),
             );
         }
-    }
     Value::Object(servers)
 }
 fn skill_folders(agent: &AiAgent) -> Vec<PathBuf> {

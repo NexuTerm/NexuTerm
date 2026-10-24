@@ -537,14 +537,13 @@ Puede solicitar permiso para leerlas.",
         }
     });
     factory.connect_bind(|_, item| {
-        if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
-            if let (Some(label), Some(value)) = (
+        if let Some(item) = item.downcast_ref::<gtk::ListItem>()
+            && let (Some(label), Some(value)) = (
                 item.child().and_downcast::<gtk::Label>(),
                 item.item().and_downcast::<gtk::StringObject>(),
             ) {
                 label.set_text(&value.string());
             }
-        }
     });
     model.set_factory(Some(&factory));
     model.add_css_class("flat");
@@ -607,7 +606,7 @@ Puede solicitar permiso para leerlas.",
     row.append(&spinner);
     row.append(&info);
     widget.append(&row);
-    let current: Rc<RefCell<Option<(String, Rc<Client>)>>> = Rc::new(RefCell::new(None));
+    let current = Rc::new(RefCell::new(None::<(String, Rc<Client>)>));
     let dialogs: Dialogs = Rc::new(RefCell::new(HashMap::new()));
     let generation = Rc::new(Cell::new(0_u64));
     let weak = welcome.downgrade();
@@ -647,14 +646,12 @@ Puede solicitar permiso para leerlas.",
                     .as_ref()
                     .map(|b| b.path().to_string_lossy().into_owned());
             }
-            if login {
-                if let Some((id, client)) = current.borrow().as_ref() {
-                    if id == &agent.id && client.alive() {
+            if login
+                && let Some((id, client)) = current.borrow().as_ref()
+                    && id == &agent.id && client.alive() {
                         client.login();
                         return;
                     }
-                }
-            }
             let (
                 Some(list),
                 Some(input),
@@ -774,11 +771,10 @@ Puede solicitar permiso para leerlas.",
                                 mode.set_sensitive(tools);
                                 mode.set_tooltip_text(Some(if tools{"Permisos del agente"}else{"Este proveedor API solo intercambia texto; las extensiones se conservan en el perfil."}));
                             }
-                            if let Some(recent) = recent.upgrade() {
-                                if let Some(parent) = recent.parent() {
+                            if let Some(recent) = recent.upgrade()
+                                && let Some(parent) = recent.parent() {
                                     parent.set_visible(has_history);
                                 }
-                            }
                             if let Some(selector) = reasoning_selector.upgrade() {
                                 selector.set_visible(reasoning);
                             }
@@ -869,15 +865,14 @@ Puede solicitar permiso para leerlas.",
                                                     item["text"].as_str().unwrap_or(""),
                                                     false,
                                                 );
-                                            } else if item["type"] == "userMessage" {
-                                                if let Some(content) = item["content"].as_array() {
+                                            } else if item["type"] == "userMessage"
+                                                && let Some(content) = item["content"].as_array() {
                                                     for text in content {
                                                         if let Some(text) = text["text"].as_str() {
                                                             message(&list, "Tú", text, false);
                                                         }
                                                     }
                                                 }
-                                            }
                                         }
                                     }
                                 }
@@ -890,7 +885,7 @@ Puede solicitar permiso para leerlas.",
                         Event::Ready(authenticated) => {
                             if let Some(button) = login_button.upgrade() {
                                 button
-                                    .set_visible(!(codex_profile && authenticated) && !api_profile);
+                                    .set_visible(!(api_profile || codex_profile && authenticated));
                                 #[cfg(debug_assertions)]
                                 if authenticated
                                     && codex_profile
@@ -1166,11 +1161,10 @@ Puede solicitar permiso para leerlas.",
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         if key == gtk::gdk::Key::Return && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
         {
-            if let Some(send) = send_weak.upgrade() {
-                if send.is_sensitive() {
+            if let Some(send) = send_weak.upgrade()
+                && send.is_sensitive() {
                     send.emit_clicked();
                 }
-            }
             return glib::Propagation::Stop;
         }
         glib::Propagation::Proceed
@@ -1192,8 +1186,8 @@ Puede solicitar permiso para leerlas.",
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             attempts.set(attempts.get() + 1);
             assert!(attempts.get() < 25, "native Codex did not become ready");
-            if let (Some(input), Some(send)) = (input.upgrade(), send.upgrade()) {
-                if send.is_sensitive()
+            if let (Some(input), Some(send)) = (input.upgrade(), send.upgrade())
+                && send.is_sensitive()
                     && (std::env::var("NEXUTERM_SMOKE_AI").as_deref() != Ok("switch")
                         || attempts.get() > 14)
                 {
@@ -1223,7 +1217,6 @@ Puede solicitar permiso para leerlas.",
                     send.emit_clicked();
                     return glib::ControlFlow::Break;
                 }
-            }
             glib::ControlFlow::Continue
         });
     }

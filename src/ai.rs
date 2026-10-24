@@ -325,76 +325,6 @@ pub async fn free_models() -> Result<Vec<String>, String> {
     Ok(models)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn profile(kind: AiKind) -> AiAgent {
-        AiAgent {
-            id: "test".into(),
-            name: "Test".into(),
-            kind,
-            endpoint: "http://127.0.0.1:11434/v1".into(),
-            model: "test-model".into(),
-            ..AiAgent::default()
-        }
-    }
-    #[test]
-    fn request_formats_and_limits() {
-        let history = vec![Message {
-            role: "user".into(),
-            content: "literal \" $()\ntext".into(),
-        }];
-        let body = request_body(&profile(AiKind::Responses), &history).unwrap();
-        assert_eq!(body["store"], false);
-        assert_eq!(body["input"][0]["content"], history[0].content);
-        let body = request_body(&profile(AiKind::ChatCompletions), &history).unwrap();
-        assert_eq!(body["messages"][0]["role"], "user");
-        assert!(
-            request_body(
-                &profile(AiKind::Responses),
-                &vec![history[0].clone(); MAX_MESSAGES + 1]
-            )
-            .is_err()
-        );
-        assert!(
-            request_body(
-                &profile(AiKind::Responses),
-                &[Message {
-                    role: "user".into(),
-                    content: "x".repeat(MAX_CONTEXT + 1)
-                }]
-            )
-            .is_err()
-        );
-        assert!(validate_key("bad\nkey").is_err());
-        assert_eq!(quoted("a\"\\b").unwrap(), "\"a\\\"\\\\b\"");
-    }
-    #[test]
-    fn parses_text_blocks_after_reasoning_and_refusals() {
-        let value = json!({"output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"Hello"},{"type":"output_text","text":" world"}]}]});
-        assert_eq!(
-            parse_response(AiKind::Responses, &value).unwrap(),
-            "Hello world"
-        );
-        assert_eq!(
-            parse_response(
-                AiKind::ChatCompletions,
-                &json!({"choices":[{"message":{"refusal":"Cannot do that"}}]})
-            )
-            .unwrap(),
-            "Cannot do that"
-        );
-        assert!(parse_response(AiKind::Responses, &json!({"output":[]})).is_err());
-    }
-    #[test]
-    fn free_catalog_excludes_paid_and_non_chat_models() {
-        let models = parse_free_models(
-            &json!({"data":[{"id":"example-free"},{"id":"paid"},{"id":"jev-1.13-free"},{"id":"big-pickle"},{"id":"example-free"}]}),
-        );
-        assert_eq!(models, vec!["opencode/big-pickle", "opencode/example-free"]);
-    }
-}
-
 /// One bounded native API exchange with explicit terminal function tools.
 /// Arbitrary MCP servers are never executed by this transport.
 #[cfg(feature = "gui")]
@@ -501,4 +431,74 @@ pub async fn local_model_tools(endpoint: String, model: String) -> Result<Option
     Ok(value["capabilities"]
         .as_array()
         .map(|values| values.iter().any(|v| v == "tools")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn profile(kind: AiKind) -> AiAgent {
+        AiAgent {
+            id: "test".into(),
+            name: "Test".into(),
+            kind,
+            endpoint: "http://127.0.0.1:11434/v1".into(),
+            model: "test-model".into(),
+            ..AiAgent::default()
+        }
+    }
+    #[test]
+    fn request_formats_and_limits() {
+        let history = vec![Message {
+            role: "user".into(),
+            content: "literal \" $()\ntext".into(),
+        }];
+        let body = request_body(&profile(AiKind::Responses), &history).unwrap();
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][0]["content"], history[0].content);
+        let body = request_body(&profile(AiKind::ChatCompletions), &history).unwrap();
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert!(
+            request_body(
+                &profile(AiKind::Responses),
+                &vec![history[0].clone(); MAX_MESSAGES + 1]
+            )
+            .is_err()
+        );
+        assert!(
+            request_body(
+                &profile(AiKind::Responses),
+                &[Message {
+                    role: "user".into(),
+                    content: "x".repeat(MAX_CONTEXT + 1)
+                }]
+            )
+            .is_err()
+        );
+        assert!(validate_key("bad\nkey").is_err());
+        assert_eq!(quoted("a\"\\b").unwrap(), "\"a\\\"\\\\b\"");
+    }
+    #[test]
+    fn parses_text_blocks_after_reasoning_and_refusals() {
+        let value = json!({"output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"Hello"},{"type":"output_text","text":" world"}]}]});
+        assert_eq!(
+            parse_response(AiKind::Responses, &value).unwrap(),
+            "Hello world"
+        );
+        assert_eq!(
+            parse_response(
+                AiKind::ChatCompletions,
+                &json!({"choices":[{"message":{"refusal":"Cannot do that"}}]})
+            )
+            .unwrap(),
+            "Cannot do that"
+        );
+        assert!(parse_response(AiKind::Responses, &json!({"output":[]})).is_err());
+    }
+    #[test]
+    fn free_catalog_excludes_paid_and_non_chat_models() {
+        let models = parse_free_models(
+            &json!({"data":[{"id":"example-free"},{"id":"paid"},{"id":"jev-1.13-free"},{"id":"big-pickle"},{"id":"example-free"}]}),
+        );
+        assert_eq!(models, vec!["opencode/big-pickle", "opencode/example-free"]);
+    }
 }

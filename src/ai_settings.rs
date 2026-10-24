@@ -442,7 +442,7 @@ pub(super) fn configure(
             }
         }
         if let Some(args) = args_weak.upgrade() {
-            args.set_sensitive(!matches!(selected, 2 | 3 | 4));
+            args.set_sensitive(!matches!(selected, 2..=4));
         }
         if let Some(model) = model_weak.upgrade() {
             model.set_sensitive(selected != 0);
