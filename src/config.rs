@@ -51,6 +51,8 @@ pub struct Preferences {
     pub color_scheme: String,
     pub scrollback: u32,
     pub sidebar_visible: bool,
+    pub files_use_system_app: bool,
+    pub editor_line_numbers: bool,
     pub monitor_interval: u64,
     pub shortcuts: std::collections::BTreeMap<String, String>,
 }
@@ -65,6 +67,8 @@ impl Default for Preferences {
             color_scheme: "dark".into(),
             scrollback: 10000,
             sidebar_visible: true,
+            files_use_system_app: false,
+            editor_line_numbers: true,
             monitor_interval: 5,
             shortcuts: Default::default(),
         }
@@ -353,6 +357,20 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explorer_preferences_are_backward_compatible_and_persist() {
+        let mut preferences: super::Preferences = serde_json::from_str("{}").unwrap();
+        assert!(!preferences.files_use_system_app);
+        assert!(preferences.editor_line_numbers);
+        preferences.files_use_system_app = true;
+        preferences.editor_line_numbers = false;
+        let json = serde_json::to_string(&preferences).unwrap();
+        let restored: super::Preferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.files_use_system_app);
+        assert!(!restored.editor_line_numbers);
+    }
+
+
     use super::*;
     #[test]
     fn ai_agents_are_optional_and_roundtrip() {

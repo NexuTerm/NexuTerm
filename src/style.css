@@ -32,6 +32,10 @@
     background: none;
     border: none;
     box-shadow: none;
+    min-width: 3px;
+    min-height: 3px;
+    margin: 0;
+    padding: 0;
 }
 
 .nexuterm-workspace {
@@ -52,3 +56,36 @@
 .ai-composer textview, .ai-composer textview text { background: transparent; }
 .ai-panel .card { border-radius: 12px; box-shadow: none; background: alpha(currentColor, 0.025); }
 .ai-panel .card textview, .ai-panel .card textview text { background: transparent; }
+
+/* Theme-derived surfaces keep the workspace readable in light and dark mode. */
+.local-explorer {
+    border: 1px solid alpha(currentColor, 0.22);
+    border-radius: 10px;
+    background: linear-gradient(145deg, alpha(currentColor, 0.035), alpha(@view_bg_color, 0.98) 45%);
+    padding: 0 8px 8px;
+}
+.local-explorer .heading { color: @view_fg_color; letter-spacing: 2px; font-size: 11px; }
+.local-explorer entry { border-radius: 10px; min-height: 34px; }
+.file-details { background: transparent; }
+.file-details row { padding: 0; border-radius: 6px; margin: 1px 0; }
+.file-details row > box { padding: 10px 8px; border-radius: 6px; }
+.file-even { background: alpha(currentColor, 0.025); }
+.file-odd { background: alpha(currentColor, 0.06); }
+.file-details row:selected { background: alpha(currentColor, 0.14); }
+.detail-columns { padding: 8px; font-size: 11px; font-weight: bold; opacity: 0.7; }
+.modern-editor { background: @view_bg_color; }
+.editor-toolbar { padding: 10px 16px; background: alpha(currentColor, 0.06); }
+.modern-editor textview { font-family: monospace; font-size: 13px; }
+.editor-gutter { background: alpha(currentColor, 0.04); border-right: 1px solid alpha(currentColor, 0.08); }
+
+.explorer-heading { min-height: 42px; border-bottom: 1px solid alpha(currentColor, 0.1); }
+.explorer-heading button { padding: 4px; min-width: 24px; min-height: 24px; }
+.local-explorer entry { font-family: monospace; font-size: 12px; background: alpha(currentColor, 0.04); }
+.file-details row:selected, .file-details row:selected label { color: @view_fg_color; }
+.nexuterm-tools { min-height: 40px; border-bottom: 1px solid alpha(currentColor, 0.08); }
+
+/* Compact tabs leave the document area to terminals and editors. */
+.nexuterm-workspace tabbar .box { padding: 0; }
+.nexuterm-workspace tabbar tabbox { min-height: 26px; padding-top: 1px; padding-bottom: 1px; }
+.nexuterm-workspace tabbar tab { min-height: 24px; padding: 1px 6px; }
+.nexuterm-workspace tabbar tab button.image-button { min-height: 20px; min-width: 20px; padding: 0; margin: 0; }

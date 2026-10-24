@@ -29,6 +29,35 @@ pub(super) fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
     let filter = gtk::SearchEntry::builder()
         .placeholder_text("Buscar por nombre, grupo o destino…")
         .build();
+    window.insert_action_group("connection", Some(parent));
+    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let active = gtk::Label::new(Some("Conexión activa"));
+    active.add_css_class("dim-label");
+    tools.append(&active);
+    for (icon, label, action) in [
+        ("view-refresh-symbolic", "Reconectar terminal", "reconnect"),
+        (
+            "network-offline-symbolic",
+            "Desconectar terminal",
+            "disconnect",
+        ),
+        (
+            "folder-remote-symbolic",
+            "Mostrar archivos remotos",
+            "remote-files",
+        ),
+    ] {
+        let button = icon_button(icon, label);
+        button.set_action_name(Some(&format!("connection.{action}")));
+        let main = parent.downgrade();
+        button.connect_clicked(move |_| {
+            if let Some(main) = main.upgrade() {
+                main.present();
+            }
+        });
+        tools.append(&button);
+    }
+    root.append(&tools);
     root.append(&filter);
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);

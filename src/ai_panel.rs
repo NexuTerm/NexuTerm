@@ -41,7 +41,7 @@ pub(super) fn install(
         side.add_css_class(class);
     }
     side.set_margin_top(2);
-    side.set_margin_end(12);
+    side.set_margin_end(0);
     side.set_margin_bottom(8);
     let heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let title = gtk::Label::new(Some("Chat"));

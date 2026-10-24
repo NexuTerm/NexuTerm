@@ -41,19 +41,15 @@ pub(super) fn install_actions(
             "Conexiones",
             vec![
                 ("Administrar sesiones…", "sessions"),
-                ("Nueva conexión", "new-connection"),
-                ("Terminal local", "new-terminal"),
             ],
         ),
         (
             "Terminal",
             vec![
+                ("Terminal local", "new-terminal"),
                 ("Buscar…", "search"),
                 ("Dividir en columnas", "split-horizontal"),
                 ("Dividir en filas", "split-vertical"),
-                ("Reconectar", "reconnect"),
-                ("Desconectar", "disconnect"),
-                ("Mostrar archivos remotos", "remote-files"),
                 ("Aumentar texto", "zoom-in"),
                 ("Reducir texto", "zoom-out"),
             ],
@@ -61,7 +57,7 @@ pub(super) fn install_actions(
         (
             "Vista y herramientas",
             vec![
-                ("Mostrar conexiones", "sidebar"),
+                ("Mostrar explorador", "sidebar"),
                 ("Agentes de IA", "ai-agents"),
                 ("Abrir archivo…", "open-file"),
                 ("Preferencias…", "preferences"),
@@ -79,6 +75,8 @@ pub(super) fn install_actions(
     sidebar.set_visible(state.config.borrow().preferences.sidebar_visible);
     apply_theme(&state.config.borrow().preferences.theme);
     for name in [
+        "connections",
+        "local-files",
         "sessions",
         "new-connection",
         "new-terminal",
@@ -110,6 +108,20 @@ pub(super) fn install_actions(
                 menu.popdown();
             }
             match name {
+                "connections" => {
+                    let already_open = s.sidebar_stack.visible_child().as_ref() == Some(s.connections_side.upcast_ref());
+                    let visible = !already_open || !s.sidebar_area.is_visible();
+                    s.sidebar_stack.set_visible_child(&s.connections_side);
+                    s.sidebar_area.set_visible(visible);
+                }
+                "local-files" => {
+                    if let Some(files) = s.local_files.borrow().as_ref() {
+                        let already_open = s.sidebar_stack.visible_child().as_ref() == Some(files.widget.upcast_ref());
+                        let visible = !already_open || !s.sidebar_area.is_visible();
+                        s.sidebar_stack.set_visible_child(&files.widget);
+                        s.sidebar_area.set_visible(visible);
+                    }
+                }
                 "sessions" => sessions::show(&s, &w),
                 "new-connection" => profile_dialog(&s, &w, None),
                 "new-terminal" => local_terminal(&s),
@@ -513,16 +525,22 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
         "Líneas de historial",
         &current.scrollback.to_string(),
     );
-    let side = gtk::CheckButton::with_label("Mostrar conexiones al iniciar");
+    let side = gtk::CheckButton::with_label("Mostrar explorador al iniciar");
     side.set_active(current.sidebar_visible);
     grid.attach(&side, 0, 3, 2, 1);
+    let external = gtk::CheckButton::with_label("Abrir archivos con la aplicación del sistema");
+    external.set_active(current.files_use_system_app);
+    grid.attach(&external, 0, 4, 2, 1);
+    let numbers = gtk::CheckButton::with_label("Mostrar números de línea en el editor");
+    numbers.set_active(current.editor_line_numbers);
+    grid.attach(&numbers, 0, 5, 2, 1);
     let error = gtk::Label::new(None);
     error.set_wrap(true);
-    grid.attach(&error, 0, 4, 2, 1);
+    grid.attach(&error, 0, 6, 2, 1);
     let save = gtk::Button::with_label("Guardar");
     save.add_css_class("suggested-action");
     save.set_sensitive(state.config_writable);
-    grid.attach(&save, 1, 5, 1, 1);
+    grid.attach(&save, 1, 7, 1, 1);
     let s = Rc::downgrade(state);
     let d = dialog.downgrade();
     save.connect_clicked(move |_| {
@@ -559,6 +577,8 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
         config.preferences.font = selected_font.to_string();
         config.preferences.scrollback = scrollback;
         config.preferences.sidebar_visible = side.is_active();
+        config.preferences.files_use_system_app = external.is_active();
+        config.preferences.editor_line_numbers = numbers.is_active();
         if let Err(e) = config::save(&s.path, &config) {
             error.set_text(&e);
             return;

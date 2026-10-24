@@ -24,8 +24,13 @@ pub struct LocalPane {
     status: gtk::Label,
     remote: Weak<Panel>,
     cancel: gio::Cancellable,
+    state: Weak<State>,
+    standalone: bool,
 }
 impl LocalPane {
+    pub fn is_loading(&self) -> bool {
+        self.busy.get()
+    }
     pub fn directory(&self) -> PathBuf {
         self.current.borrow().clone()
     }
@@ -43,23 +48,25 @@ impl LocalPane {
     pub fn stop(&self) {
         self.cancel.cancel();
     }
-    fn new(state: &Rc<State>, remote: &Rc<Panel>) -> Rc<Self> {
+    pub fn local(state: &Rc<State>) -> Rc<Self> {
+        Self::new(state, None)
+    }
+    fn new(state: &Rc<State>, remote: Option<&Rc<Panel>>) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 8);
         widget.add_css_class("nexuterm-section");
         widget.add_css_class("nexuterm-panel");
-        for set in [
-            gtk::Widget::set_margin_top,
-            gtk::Widget::set_margin_bottom,
-            gtk::Widget::set_margin_start,
-            gtk::Widget::set_margin_end,
-        ] {
-            set(widget.upcast_ref(), 8);
-        }
+        widget.add_css_class("local-explorer");
+        widget.set_margin_top(2);
+        widget.set_margin_bottom(8);
         widget.set_width_request(240);
         let title = gtk::Label::new(Some("ARCHIVOS LOCALES"));
         title.set_xalign(0.0);
         title.add_css_class("heading");
-        widget.append(&title);
+        let heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        heading.add_css_class("explorer-heading");
+        title.set_hexpand(true);
+        heading.append(&title);
+        widget.append(&heading);
         let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let up = icon_button("go-up-symbolic", "Carpeta local superior");
         let home = icon_button("user-home-symbolic", "Carpeta personal local");
@@ -68,13 +75,34 @@ impl LocalPane {
         for button in [&up, &home, &refresh, &upload] {
             tools.append(button);
         }
-        widget.append(&tools);
+        upload.set_visible(remote.is_some());
+        if remote.is_none() {
+            let open = icon_button("document-open-symbolic", "Abrir archivo · Ctrl+O");
+            open.set_action_name(Some("win.open-file"));
+            tools.append(&open);
+        }
+        heading.append(&tools);
         let path = gtk::Entry::new();
         path.set_tooltip_text(Some("Carpeta local · Enter para abrir"));
         widget.append(&path);
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
-        list.add_css_class("navigation-sidebar");
+        list.set_activate_on_single_click(false);
+        list.add_css_class("file-details");
+        let columns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        for (caption, width, expand) in [
+            ("Nombre", 0, true),
+            ("Tipo", 70, false),
+            ("Tamaño", 76, false),
+        ] {
+            let label = gtk::Label::new(Some(caption));
+            label.set_xalign(0.0);
+            label.set_width_request(width);
+            label.set_hexpand(expand);
+            columns.append(&label);
+        }
+        columns.add_css_class("detail-columns");
+        widget.append(&columns);
         widget.append(
             &gtk::ScrolledWindow::builder()
                 .child(&list)
@@ -82,12 +110,15 @@ impl LocalPane {
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .build(),
         );
-        let next = gtk::Button::with_label("Página siguiente");
+        let next = icon_button("go-next-symbolic", "Mostrar los siguientes archivos");
         next.set_sensitive(false);
-        widget.append(&next);
+        next.set_visible(remote.is_some());
+        tools.append(&next);
         let status = gtk::Label::new(None);
         status.set_xalign(0.0);
         status.set_wrap(true);
+        status.set_visible(remote.is_some());
+        status.add_css_class("error");
         widget.append(&status);
         let cancel = gio::Cancellable::new();
         state.operations.borrow_mut().push(cancel.downgrade());
@@ -98,7 +129,7 @@ impl LocalPane {
                     .map(PathBuf::from)
                     .unwrap_or_else(glib::home_dir)
             } else {
-                glib::home_dir()
+                std::env::current_dir().unwrap_or_else(|_| glib::home_dir())
             }),
             path,
             list,
@@ -107,7 +138,9 @@ impl LocalPane {
             busy: Cell::new(false),
             next,
             status,
-            remote: Rc::downgrade(remote),
+            remote: remote.map(Rc::downgrade).unwrap_or_default(),
+            state: Rc::downgrade(state),
+            standalone: remote.is_none(),
             cancel,
         });
         let p = Rc::downgrade(&panel);
@@ -158,7 +191,11 @@ impl LocalPane {
                 if let Some(entry) = entry {
                     if entry.directory {
                         p.navigate(p.directory().join(entry.name));
-                    } else {
+                    } else if p.standalone && entry.regular {
+                        if let Some(state) = p.state.upgrade() {
+                            crate::ui::open_local_file(&state, p.directory().join(entry.name));
+                        }
+                    } else if !p.standalone {
                         p.upload();
                     }
                 }
@@ -187,7 +224,7 @@ impl LocalPane {
                 .set_text("Selecciona un archivo local para subir.");
         }
     }
-    fn navigate(self: &Rc<Self>, directory: PathBuf) {
+    pub fn navigate(self: &Rc<Self>, directory: PathBuf) {
         if self.busy.replace(true) || self.cancel.is_cancelled() {
             return;
         }
@@ -223,7 +260,10 @@ impl LocalPane {
                         p.path.set_text(&directory.to_string_lossy());
                         p.page();
                     }
-                    Err(error) => p.status.set_text(&error.to_string()),
+                    Err(error) => {
+                        p.status.set_text(&error.to_string());
+                        p.status.set_visible(true);
+                    }
                 }
             }
         });
@@ -251,9 +291,14 @@ impl LocalPane {
                     return;
                 }
                 match result {
-                    Err(error) => p.status.set_text(&error.to_string()),
+                    Err(error) => {
+                        p.status.set_text(&error.to_string());
+                        p.status.set_visible(true);
+                    }
                     Ok(infos) => {
                         p.next.set_sensitive(infos.len() == PAGE_SIZE);
+                        p.next.set_visible(infos.len() == PAGE_SIZE);
+                        p.status.set_visible(!p.standalone);
                         let mut entries: Vec<_> = infos
                             .into_iter()
                             .map(|info| Entry {
@@ -271,7 +316,7 @@ impl LocalPane {
                         while let Some(row) = p.list.first_child() {
                             p.list.remove(&row);
                         }
-                        for entry in &entries {
+                        for (index, entry) in entries.iter().enumerate() {
                             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                             row.append(&gtk::Image::from_icon_name(if entry.directory {
                                 "folder-symbolic"
@@ -283,13 +328,74 @@ impl LocalPane {
                             name.set_hexpand(true);
                             name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                             row.append(&name);
-                            if let Some(size) = entry.size.filter(|_| entry.regular) {
-                                row.append(&gtk::Label::new(Some(&glib::format_size(size))));
-                            }
+                            let kind = gtk::Label::new(Some(if entry.directory {
+                                "Carpeta"
+                            } else if entry.regular {
+                                "Archivo"
+                            } else {
+                                "Enlace / otro"
+                            }));
+                            kind.set_width_request(70);
+                            kind.set_xalign(0.0);
+                            kind.add_css_class("dim-label");
+                            row.append(&kind);
+                            let size = gtk::Label::new(
+                                entry
+                                    .size
+                                    .filter(|_| entry.regular)
+                                    .map(glib::format_size)
+                                    .as_deref(),
+                            );
+                            size.set_width_request(76);
+                            size.set_xalign(1.0);
+                            row.append(&size);
+                            row.add_css_class(if index % 2 == 0 {
+                                "file-even"
+                            } else {
+                                "file-odd"
+                            });
                             p.list.append(&row);
                         }
                         p.status.set_text(&format!("{} entradas", entries.len()));
                         *p.entries.borrow_mut() = entries;
+                        #[cfg(debug_assertions)]
+                        if p.standalone
+                            && std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some()
+                        {
+                            let name = if p
+                                .directory()
+                                .file_name()
+                                .is_some_and(|name| name == "nested")
+                            {
+                                "sample con á.txt"
+                            } else {
+                                "nested"
+                            };
+                            let index = p
+                                .entries
+                                .borrow()
+                                .iter()
+                                .position(|entry| entry.name == std::path::Path::new(name))
+                                .expect("Explorer fixture listed");
+                            assert!(!p.list.activates_on_single_click());
+                            let row = p.list.row_at_index(index as i32).unwrap();
+                            if name == "sample con á.txt" {
+                                eprintln!("NEXUTERM_SMOKE_LOCAL_NAVIGATION_OK");
+                            }
+                            if name == "nested" {
+                                let list = p.list.downgrade();
+                                glib::timeout_add_local_once(
+                                    std::time::Duration::from_millis(1300),
+                                    move || {
+                                        if let Some(list) = list.upgrade() {
+                                            list.emit_by_name::<()>("row-activated", &[&row]);
+                                        }
+                                    },
+                                );
+                            } else {
+                                p.list.emit_by_name::<()>("row-activated", &[&row]);
+                            }
+                        }
                     }
                 }
             }
@@ -298,7 +404,7 @@ impl LocalPane {
 }
 
 pub fn workspace(state: &Rc<State>, remote: &Rc<Panel>) -> (gtk::Paned, Rc<LocalPane>) {
-    let local = LocalPane::new(state, remote);
+    let local = LocalPane::new(state, Some(remote));
     remote.bind_local(&local);
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
     split.add_css_class("nexuterm-split");

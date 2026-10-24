@@ -67,14 +67,8 @@ impl Panel {
         widget.add_css_class("nexuterm-section");
         widget.add_css_class("nexuterm-panel");
         widget.set_width_request(240);
-        for set in [
-            gtk::Widget::set_margin_top,
-            gtk::Widget::set_margin_bottom,
-            gtk::Widget::set_margin_start,
-            gtk::Widget::set_margin_end,
-        ] {
-            set(widget.upcast_ref(), 8);
-        }
+        widget.set_margin_top(2);
+        widget.set_margin_bottom(8);
         let heading = gtk::Label::new(Some("ARCHIVOS REMOTOS"));
         heading.set_xalign(0.0);
         heading.add_css_class("heading");

@@ -18,12 +18,14 @@ pub struct State {
     pub status: gtk::Label,
     sidebar: gtk::ListBox,
     connections_side: gtk::Box,
+    local_directory: RefCell<Option<(glib::WeakRef<vte4::Terminal>, PathBuf)>>,
+    local_files: RefCell<Option<Rc<crate::file_browser::LocalPane>>>,
     sidebar_area: gtk::Box,
     sidebar_stack: gtk::Stack,
     remote_panels: RefCell<Vec<(glib::WeakRef<gtk::Widget>, glib::WeakRef<gtk::Box>)>>,
     window: glib::WeakRef<gtk::ApplicationWindow>,
     manager: RefCell<glib::WeakRef<gtk::ApplicationWindow>>,
-    config: RefCell<Config>,
+    pub(crate) config: RefCell<Config>,
     path: PathBuf,
     config_writable: bool,
     sessions: RefCell<Vec<Weak<Session>>>,
@@ -128,22 +130,17 @@ pub fn build(app: &gtk::Application) {
         "utilities-terminal-symbolic",
         "Terminal local · Ctrl+Mayús+T",
     );
-    let new_session = icon_button("network-server-symbolic", "Nueva conexión · Ctrl+N");
-    let open_file = icon_button("document-open-symbolic", "Abrir archivo · Ctrl+O");
-    let toggle_side = icon_button("sidebar-show-symbolic", "Mostrar u ocultar conexiones · F9");
-    toggle_side.set_action_name(Some("win.sidebar"));
+    let toggle_side = icon_button("folder-symbolic", "Abrir u ocultar explorador de archivos · F9");
+    toggle_side.set_action_name(Some("win.local-files"));
     header.pack_start(&toggle_side);
-    header.pack_start(&new_session);
-    let manage = icon_button("view-list-symbolic", "Administrar sesiones · Ctrl+Mayús+S");
-    manage.set_action_name(Some("win.sessions"));
+    let manage = icon_button("network-server-symbolic", "Mostrar u ocultar paleta de conexiones");
+    manage.set_action_name(Some("win.connections"));
     header.pack_start(&manage);
-    header.pack_start(&new_terminal);
     let search_button = icon_button(
         "system-search-symbolic",
         "Buscar en la terminal · Ctrl+Mayús+F",
     );
     search_button.set_action_name(Some("win.search"));
-    header.pack_end(&search_button);
     let menu_button = gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")
         .tooltip_text("Menú principal")
@@ -151,12 +148,13 @@ pub fn build(app: &gtk::Application) {
     header.pack_end(&menu_button);
     root.add_top_bar(&header);
     let context = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    context.set_margin_start(12);
-    context.set_margin_end(12);
+    context.set_margin_start(6);
+    context.set_margin_end(6);
     context.set_margin_top(0);
     context.set_margin_bottom(0);
     context.add_css_class("toolbar");
     context.add_css_class("nexuterm-tools");
+    context.append(&new_terminal);
     for (icon, label, action) in [
         (
             "view-dual-symbolic",
@@ -164,40 +162,57 @@ pub fn build(app: &gtk::Application) {
             "split-horizontal",
         ),
         ("view-list-symbolic", "Dividir en filas", "split-vertical"),
-        ("view-refresh-symbolic", "Reconectar terminal", "reconnect"),
-        (
-            "network-offline-symbolic",
-            "Desconectar terminal",
-            "disconnect",
-        ),
-        (
-            "folder-remote-symbolic",
-            "Mostrar u ocultar archivos remotos",
-            "remote-files",
-        ),
     ] {
         let button = icon_button(icon, label);
         button.set_action_name(Some(&format!("win.{action}")));
         context.append(&button);
     }
-    root.add_top_bar(&context);
+    context.append(&search_button);
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
     split.add_css_class("nexuterm-split");
     split.set_vexpand(true);
-    split.set_position(300);
+    split.set_position(420);
+    split.add_tick_callback(move |split, _| {
+        if split.width() > 0 {
+            split.set_position(split.width() / 3);
+            glib::ControlFlow::Break
+        } else { glib::ControlFlow::Continue }
+    });
     split.set_shrink_start_child(false);
     let side = gtk::Box::new(gtk::Orientation::Vertical, 10);
     side.add_css_class("nexuterm-section");
     side.add_css_class("nexuterm-panel");
-    side.set_margin_start(12);
-    side.set_margin_end(12);
+    side.set_margin_start(0);
+    side.set_margin_end(0);
     side.set_margin_top(2);
     side.set_margin_bottom(8);
     side.set_width_request(220);
     let title = gtk::Label::new(Some("CONEXIONES GUARDADAS"));
     title.set_xalign(0.0);
     title.add_css_class("heading");
-    side.append(&title);
+    let connection_tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    title.set_hexpand(true);
+    connection_tools.append(&title);
+    for (icon, label, action) in [
+        ("list-add-symbolic", "Nueva conexión · Ctrl+N", "new-connection"),
+        ("view-list-symbolic", "Administrar sesiones · Ctrl+Mayús+S", "sessions"),
+    ] {
+        let button = icon_button(icon, label);
+        button.set_action_name(Some(&format!("win.{action}")));
+        connection_tools.append(&button);
+    }
+    side.append(&connection_tools);
+    let connection_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    for (icon, label, action) in [
+        ("view-refresh-symbolic", "Reconectar terminal", "reconnect"),
+        ("network-offline-symbolic", "Desconectar terminal", "disconnect"),
+        ("folder-remote-symbolic", "Mostrar archivos remotos", "remote-files"),
+    ] {
+        let button = icon_button(icon, label);
+        button.set_action_name(Some(&format!("win.{action}")));
+        connection_actions.append(&button);
+    }
+    side.append(&connection_actions);
     let sidebar = gtk::ListBox::new();
     sidebar.set_selection_mode(gtk::SelectionMode::None);
     let scroll = gtk::ScrolledWindow::builder()
@@ -225,8 +240,9 @@ pub fn build(app: &gtk::Application) {
     workspace.set_overflow(gtk::Overflow::Hidden);
     tabbar.set_overflow(gtk::Overflow::Hidden);
     workspace.set_margin_top(2);
-    workspace.set_margin_end(12);
+    workspace.set_margin_end(0);
     workspace.set_margin_bottom(8);
+    workspace.append(&context);
     workspace.append(&tabbar);
     workspace.append(&notebook);
     notebook.set_hexpand(true);
@@ -240,11 +256,15 @@ pub fn build(app: &gtk::Application) {
     sidebar_area.append(&sidebar_stack);
     split.set_start_child(Some(&sidebar_area));
     split.set_end_child(Some(&workspace));
-    split.set_resize_start_child(false);
+    // Both children must resize so GTK preserves the explorer/terminal ratio.
+    split.set_resize_start_child(true);
+    split.set_resize_end_child(true);
     let ai_side = gtk::Box::new(gtk::Orientation::Vertical, 0);
     ai_side.set_visible(false);
     let ai_split = gtk::Paned::new(gtk::Orientation::Horizontal);
     ai_split.add_css_class("nexuterm-split");
+    ai_split.set_margin_start(12);
+    ai_split.set_margin_end(12);
     ai_split.set_start_child(Some(&split));
     ai_split.set_end_child(Some(&ai_side));
     ai_split.set_resize_end_child(false);
@@ -263,6 +283,8 @@ pub fn build(app: &gtk::Application) {
         status,
         sidebar,
         connections_side: side.clone(),
+        local_directory: RefCell::new(None),
+        local_files: RefCell::new(None),
         sidebar_area: sidebar_area.clone(),
         sidebar_stack,
         remote_panels: RefCell::new(Vec::new()),
@@ -285,6 +307,9 @@ pub fn build(app: &gtk::Application) {
     ai_button.set_action_name(Some("win.ai-agents"));
     header.pack_end(&ai_button);
     adw_window.set_content(Some(&root));
+    let local_files = crate::file_browser::LocalPane::local(&state);
+    state.sidebar_stack.add_child(&local_files.widget);
+    *state.local_files.borrow_mut() = Some(local_files);
     install_actions(&state, &window, app, &sidebar_area, &menu_button);
     let s = Rc::downgrade(&state);
     state.notebook.connect_selected_page_notify(move |_| {
@@ -314,10 +339,14 @@ pub fn build(app: &gtk::Application) {
                 .contains(query.as_str())
         });
     });
+    let weak = Rc::downgrade(&state);
+    glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+        let Some(state) = weak.upgrade() else { return glib::ControlFlow::Break; };
+        if let Some(term) = state.focused_terminal.borrow().upgrade() { sync_local_directory(&state, &term); }
+        glib::ControlFlow::Continue
+    });
     refresh_sidebar(&state, &window);
     new_terminal.set_action_name(Some("win.new-terminal"));
-    new_session.set_action_name(Some("win.new-connection"));
-    open_file.set_action_name(Some("win.open-file"));
     let force_close = Rc::new(Cell::new(false));
     let force = force_close.clone();
     let s = state.clone();
@@ -518,7 +547,7 @@ pub fn build(app: &gtk::Application) {
             state.notebook.set_selected_page(&local);
             assert_eq!(
                 state.sidebar_stack.visible_child(),
-                Some(state.connections_side.clone().upcast())
+                state.local_files.borrow().as_ref().map(|p| p.widget.clone().upcast())
             );
             state.notebook.set_selected_page(&ssh_page);
             assert_eq!(state.sidebar_stack.visible_child(), Some(panel));
@@ -526,7 +555,7 @@ pub fn build(app: &gtk::Application) {
         } else {
             assert_eq!(
                 state.sidebar_stack.visible_child(),
-                Some(state.connections_side.clone().upcast())
+                state.local_files.borrow().as_ref().map(|p| p.widget.clone().upcast())
             );
         }
     }
@@ -543,6 +572,78 @@ pub fn build(app: &gtk::Application) {
     window.present();
     // Optional deterministic local UI smoke check, with no network or user-profile writes.
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some() {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
+            let local = state.local_files.borrow().as_ref().unwrap().widget.downgrade();
+            let agents = ai_side.downgrade();
+            let tabs = tabbar.downgrade();
+            let palette_state = Rc::downgrade(&state);
+            let split = split.downgrade();
+            let window = window.downgrade();
+            let step = Cell::new(0);
+            glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+                let (Some(split), Some(window)) = (split.upgrade(), window.upgrade()) else {
+                    return glib::ControlFlow::Break;
+                };
+                let stage = step.get();
+                let tab_height = tabs.upgrade().unwrap().height();
+                assert!((24..=32).contains(&tab_height), "Tab bar height {tab_height} is not compact");
+                if stage == 0 {
+                    eprintln!("NEXUTERM_SMOKE_COMPACT_TABS height={tab_height}");
+                    let state = palette_state.upgrade().unwrap();
+                    gio::prelude::ActionGroupExt::activate_action(&window, "connections", None);
+                    assert!(state.sidebar_area.is_visible());
+                    assert_eq!(state.sidebar_stack.visible_child(), Some(state.connections_side.clone().upcast::<gtk::Widget>()));
+                    gio::prelude::ActionGroupExt::activate_action(&window, "local-files", None);
+                    assert!(state.sidebar_area.is_visible());
+                    assert_eq!(state.sidebar_stack.visible_child(), local.upgrade().map(|w| w.upcast::<gtk::Widget>()));
+                    eprintln!("NEXUTERM_SMOKE_PALETTE_SWITCH_OK");
+                }
+                let (expected_width, ratio) = match stage {
+                    0 => (1280, 1.0 / 3.0),
+                    1 => (1800, 1.0 / 3.0),
+                    2 => (1024, 1.0 / 3.0),
+                    3 => (1024, 0.4),
+                    _ => (1500, 0.4),
+                };
+                // Client-side window decorations consume up to 24 logical pixels.
+                assert!((window.width() - expected_width).abs() <= 24,
+                    "Window width {}, requested {expected_width}", window.width());
+                let actual = split.start_child().unwrap().width();
+                let expected = f64::from(split.width()) * ratio;
+                assert!((f64::from(actual) - expected).abs() < 5.0,
+                    "Explorer width {actual}, workspace {}, expected {expected}", split.width());
+                let local = local.upgrade().unwrap();
+                let terminal = split.end_child().unwrap();
+                let left = local.compute_bounds(&window).unwrap();
+                let right = terminal.compute_bounds(&window).unwrap();
+                assert!((left.y() - right.y()).abs() <= 1.0, "Panels must align at the top");
+                assert!((left.y() + left.height() - right.y() - right.height()).abs() <= 1.0, "Panels must align at the bottom");
+                let gap = right.x() - left.x() - left.width();
+                assert!((0.0..=3.1).contains(&gap), "Explorer/terminal gap {gap} exceeds 3px");
+                if stage == 5 {
+                    let agents = agents.upgrade().unwrap().compute_bounds(&window).unwrap();
+                    let gap = agents.x() - right.x() - right.width();
+                    assert!((0.0..=3.1).contains(&gap), "Terminal/agents gap {gap} exceeds 3px");
+                }
+                eprintln!("NEXUTERM_SMOKE_EXPLORER_WIDTH stage={stage} explorer={actual} workspace={} gap={gap}", split.width());
+                match stage {
+                    0 => window.set_default_size(1800, 820),
+                    1 => window.set_default_size(1024, 768),
+                    2 => split.set_position((f64::from(split.width()) * 0.4).round() as i32),
+                    3 => window.set_default_size(1500, 820),
+                    4 => agents.upgrade().unwrap().set_visible(true),
+                    _ => {
+                        agents.upgrade().unwrap().set_visible(false);
+                        split.set_position(split.width() / 3);
+                        eprintln!("NEXUTERM_SMOKE_EXPLORER_RESIZE_OK");
+                        return glib::ControlFlow::Break;
+                    }
+                }
+                step.set(stage + 1);
+                glib::ControlFlow::Continue
+            });
+        }
         #[cfg(debug_assertions)]
         if std::env::var_os("NEXUTERM_SMOKE_MENUS").is_some() {
             actions::smoke_menus(&window, &menu_button);
@@ -657,6 +758,8 @@ fn local_terminal(state: &Rc<State>) {
                     if cfg!(debug_assertions) && std::env::var_os("NEXUTERM_SMOKE_COLORS").is_some()
                     {
                         "printf 'Terminal · texto normal y colores ANSI\\n\\n'; for c in 30 31 32 33 34 35 36 37 90 91 92 93 94 95 96 97; do printf '\\033[%sm Color %s: archivos, avisos y resultados\\033[0m\\n' $c $c; done; printf '\\nTexto normal sin blanco o negro puros.\\n'; sleep 1".into()
+                    } else if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
+                        "printf 'NexuTerm: PTY operativo\\n'; sleep 10".into()
                     } else {
                         "printf 'NexuTerm: PTY operativo\\n'; sleep 1".into()
                     },
@@ -700,10 +803,19 @@ fn terminal_in(
     focus.connect_enter(move |_| {
         if let Some(s) = s.upgrade() {
             *s.focused_terminal.borrow_mut() = t.clone();
+            if let Some(term) = t.upgrade() { sync_local_directory(&s, &term); }
             actions::update_actions(&s);
         }
     });
     term.add_controller(focus);
+    if connection.is_none() {
+        let s = Rc::downgrade(state);
+        term.connect_current_directory_uri_notify(move |term| {
+            if let Some(s) = s.upgrade() {
+                sync_local_directory(&s, term);
+            }
+        });
+    }
     term.set_font(Some(&gtk::pango::FontDescription::from_string(
         &state.config.borrow().preferences.font,
     )));
@@ -1041,10 +1153,8 @@ fn update_sidebar(state: &State) {
     });
     if let Some(panel) = panel {
         state.sidebar_stack.set_visible_child(&panel);
-    } else {
-        state
-            .sidebar_stack
-            .set_visible_child(&state.connections_side);
+    } else if let Some(local) = state.local_files.borrow().as_ref() {
+        state.sidebar_stack.set_visible_child(&local.widget);
     }
 }
 
@@ -1642,4 +1752,65 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
         });
     });
     dialog.present();
+}
+
+fn sync_local_directory(state: &State, term: &vte4::Terminal) {
+    let local = state
+        .sessions
+        .borrow()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|session| session.terminal.upgrade().as_ref() == Some(term))
+        .filter(|session| session.connection.is_none() && session.title == "Terminal local");
+    let Some(session) = local else {
+        return;
+    };
+    if state.focused_terminal.borrow().upgrade().as_ref() != Some(term) {
+        return;
+    }
+    let path = term
+        .current_directory_uri()
+        .and_then(|uri| gio::File::for_uri(&uri).path())
+        .or_else(|| {
+            session
+                .pid
+                .get()
+                .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+        });
+    if let (Some(path), Some(panel)) = (path, state.local_files.borrow().as_ref()) {
+        let changed =
+            state
+                .local_directory
+                .borrow()
+                .as_ref()
+                .is_none_or(|(previous, directory)| {
+                    previous.upgrade().as_ref() != Some(term) || directory != &path
+                });
+        if changed && !panel.is_loading() {
+            *state.local_directory.borrow_mut() = Some((term.downgrade(), path.clone()));
+            if path != panel.directory() {
+                panel.navigate(path);
+            }
+        }
+    }
+}
+
+pub(crate) fn open_local_file(state: &Rc<State>, path: PathBuf) {
+    let file = gio::File::for_path(path);
+    if state.config.borrow().preferences.files_use_system_app {
+        let s = Rc::downgrade(state);
+        glib::spawn_future_local(async move {
+            if let Err(error) = gio::AppInfo::launch_default_for_uri_future(
+                &file.uri(),
+                None::<&gio::AppLaunchContext>,
+            )
+            .await
+                && let Some(s) = s.upgrade()
+            {
+                s.status.set_text(&format!("No se pudo abrir: {error}"));
+            }
+        });
+    } else if let Some(window) = state.window.upgrade() {
+        crate::files::editor(state, &window, file);
+    }
 }

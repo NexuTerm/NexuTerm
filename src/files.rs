@@ -27,12 +27,21 @@ pub fn choose_editor(state: &Rc<State>, window: &gtk::ApplicationWindow) {
 pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::File) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("nexuterm-section");
+    root.add_css_class("modern-editor");
     let save = gtk::Button::with_label("Guardar");
     save.set_sensitive(false);
     let status = gtk::Label::new(Some("Cargando texto UTF-8 (máximo 8 MiB)…"));
     status.set_xalign(0.0);
     status.set_wrap(true);
-    root.append(&save);
+    let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    toolbar.add_css_class("editor-toolbar");
+    let badge = gtk::Label::new(Some("EDITOR / UTF-8"));
+    badge.set_hexpand(true);
+    badge.set_xalign(0.0);
+    badge.add_css_class("heading");
+    toolbar.append(&badge);
+    toolbar.append(&save);
+    root.append(&toolbar);
     root.append(&status);
     let text = gtk::TextView::builder()
         .monospace(true)
@@ -47,12 +56,72 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
         .borrow_mut()
         .retain(|b| b.upgrade().is_some());
     state.documents.borrow_mut().push(buffer.downgrade());
-    root.append(
-        &gtk::ScrolledWindow::builder()
-            .child(&text)
-            .vexpand(true)
-            .build(),
-    );
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&text)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+    let gutter = gtk::DrawingArea::new();
+    gutter.set_content_width(64);
+    gutter.add_css_class("editor-gutter");
+    gutter.set_visible(state.config.borrow().preferences.editor_line_numbers);
+    let view = text.downgrade();
+    gutter.set_draw_func(move |area, cr, width, height| {
+        let Some(view) = view.upgrade() else {
+            return;
+        };
+        let visible = view.visible_rect();
+        let (mut iter, _) = view.line_at_y(visible.y());
+        let color = area.color();
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            0.6,
+        );
+        cr.select_font_face(
+            "monospace",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
+        cr.set_font_size(13.0);
+        loop {
+            let rect = view.iter_location(&iter);
+            let y = rect.y() - visible.y();
+            if y > height {
+                break;
+            }
+            let number = (iter.line() + 1).to_string();
+            if let Ok(extent) = cr.text_extents(&number) {
+                cr.move_to(
+                    f64::from(width) - extent.width() - 12.0,
+                    f64::from(y) + 13.0,
+                );
+                let _ = cr.show_text(&number);
+            }
+            let previous_line = iter.line();
+            iter.forward_line();
+            if iter.line() == previous_line {
+                break;
+            }
+        }
+    });
+    let g = gutter.downgrade();
+    buffer.connect_changed(move |_| {
+        if let Some(g) = g.upgrade() {
+            g.queue_draw();
+        }
+    });
+    let g = gutter.downgrade();
+    scroll.vadjustment().connect_value_changed(move |_| {
+        if let Some(g) = g.upgrade() {
+            g.queue_draw();
+        }
+    });
+    let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    body.append(&gutter);
+    body.append(&scroll);
+    root.append(&body);
     let etag = Rc::new(RefCell::new(None::<String>));
     let busy = Rc::new(Cell::new(false));
     let loaded = Rc::new(Cell::new(false));
@@ -145,6 +214,8 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
     let view = text.downgrade();
     let save = save.downgrade();
     let status = status.downgrade();
+    #[cfg(debug_assertions)]
+    let numbers = gutter.downgrade();
     glib::spawn_future_local(async move {
         let result = read_text(&file).await;
         if let (Some(buffer), Some(view), Some(save), Some(status)) = (
@@ -157,6 +228,16 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
                 Ok((contents, tag)) => {
                     buffer.set_text(&contents);
                     buffer.set_modified(false);
+                    #[cfg(debug_assertions)]
+                    if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
+                        assert_eq!(contents, "primera línea\nsegunda línea\n");
+                        assert_eq!(buffer.line_count(), 3);
+                        assert_eq!(
+                            numbers.upgrade().unwrap().is_visible(),
+                            std::env::var_os("NEXUTERM_SMOKE_NO_NUMBERS").is_none()
+                        );
+                        eprintln!("NEXUTERM_SMOKE_LOCAL_EDITOR_OK");
+                    }
                     view.set_editable(true);
                     save.set_sensitive(tag.is_some());
                     *etag.borrow_mut() = tag;
