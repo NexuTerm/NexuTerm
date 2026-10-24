@@ -2,6 +2,7 @@ mod askpass;
 mod desktop_view;
 mod file_browser;
 mod files;
+mod syntax;
 mod ftp;
 mod ftp_legacy;
 mod ftp_transfer;

@@ -51,6 +51,7 @@ pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::Fil
         .top_margin(12)
         .build();
     let buffer = text.buffer();
+    crate::syntax::bind(&buffer, file.basename().unwrap_or_default());
     state
         .documents
         .borrow_mut()
