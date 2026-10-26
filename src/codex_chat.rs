@@ -783,6 +783,7 @@ Puede solicitar permiso para leerlas.",
             let reasoning_selector = effort.clone();
             let usage = usage.clone();
             let mut ready = false;
+            let mut provider_authenticated = false;
             let recent = recent.clone();
             let models = models.clone();
             let model = model.clone();
@@ -810,6 +811,17 @@ Puede solicitar permiso para leerlas.",
                         Err(_) => return glib::ControlFlow::Break,
                     };
                     match event {
+                        Event::Authenticated(value) => {
+                            provider_authenticated = value;
+                            if let Some(button) = login_button.upgrade() {
+                                button.set_visible(!(api_profile || provider_authenticated || codex_profile && ready));
+                                #[cfg(debug_assertions)]
+                                if value && std::env::var_os("NEXUTERM_SMOKE_TEST").is_some() {
+                                    assert!(!button.is_visible());
+                                    eprintln!("NEXUTERM_SMOKE_PROVIDER_AUTH_HIDDEN");
+                                }
+                            }
+                        }
                         Event::Account(name) => {
                             usage.reset();
                             usage.account.set_text(&name.map(|name| format!("Usuario: {name}")).unwrap_or_else(|| "Usuario: no disponible".into()));
@@ -953,7 +965,7 @@ Puede solicitar permiso para leerlas.",
                         Event::Ready(authenticated) => {
                             if let Some(button) = login_button.upgrade() {
                                 button
-                                    .set_visible(!(api_profile || codex_profile && authenticated));
+                                    .set_visible(!(api_profile || provider_authenticated || codex_profile && authenticated));
                                 #[cfg(debug_assertions)]
                                 if authenticated
                                     && codex_profile
@@ -981,13 +993,15 @@ Puede solicitar permiso para leerlas.",
                             }
                             info.set_text(&text);
                         }
-                        Event::LoginUrl(url) => {
+                        event @ (Event::LoginUrl(_) | Event::LoginLink(_)) => {
+                            let automatic = matches!(&event, Event::LoginUrl(_));
+                            let (Event::LoginUrl(url) | Event::LoginLink(url)) = event else { unreachable!() };
                             if url::Url::parse(&url)
                                 .is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some())
                             {
                                 browser.set_uri(&url);
                                 browser.set_visible(true);
-                                if gio::AppInfo::launch_default_for_uri(
+                                if !automatic || gio::AppInfo::launch_default_for_uri(
                                     &url,
                                     None::<&gio::AppLaunchContext>,
                                 )
@@ -1158,6 +1172,7 @@ Puede solicitar permiso para leerlas.",
                             info.set_text(&error);
                         }
                         Event::Closed => {
+                            if let Some(button) = login_button.upgrade() { button.set_visible(!api_profile); }
                             close_dialogs(&dialogs);
                             send.set_sensitive(false);
                             spinner.stop();

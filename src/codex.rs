@@ -18,6 +18,7 @@ const MAX_FRAME: usize = 1024 * 1024;
 #[derive(Debug)]
 pub enum Event {
     Account(Option<String>),
+    Authenticated(bool),
     RateLimits(Value),
     ContextUsage { used: u64, size: u64 },
     TokenUsage { input: u64, output: u64 },
@@ -42,6 +43,7 @@ pub enum Event {
         params: Value,
     },
     LoginUrl(String),
+    LoginLink(String),
     Finished(String),
     Error(String),
     Closed,

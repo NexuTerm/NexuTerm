@@ -104,10 +104,16 @@ cambia el agente del chat activo; para conservarlo y trabajar con otro, utiliza 
 **Iniciar sesión** utiliza el acceso web del agente cuando está disponible:
 Codex mediante su servidor oficial, Copilot mediante `login --web-flow` y Claude
 mediante `claude auth login`. Otros adaptadores utilizan su método ACP anunciado.
+El receptor local se mantiene mientras se autoriza en el navegador, aunque cambien
+los permisos o se pulse de nuevo el botón de acceso. **Detener** cancela el acceso;
+si se cancela o vence su espera de cinco minutos, hay que iniciar un acceso nuevo
+desde el chat en lugar de recargar el callback anterior. Copilot abre el navegador
+una sola vez; el chat conserva un enlace manual como alternativa.
+Un método ACP que exige una terminal puede no permitir acceso web desde el chat;
+se puede usar una clave API admitida por el proveedor.
 Si el proveedor no ofrece ese flujo, configura su clave API y, para agentes nativos,
 la variable de credencial correspondiente. El botón se oculta cuando Codex confirma
-una sesión autenticada. Un método ACP que exige una terminal puede no permitir acceso
-web desde el chat; se puede usar una clave API admitida por el proveedor.
+una sesión autenticada o Copilot tiene una cuenta guardada en su perfil.
 
 Cada perfil tiene su directorio privado bajo `$XDG_DATA_HOME/nexuterm/agents/`.
 Su autenticación y extensiones no se comparten con otros perfiles ni se copian desde

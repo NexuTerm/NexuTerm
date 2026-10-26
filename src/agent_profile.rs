@@ -222,6 +222,7 @@ pub fn isolated(command: &mut tokio::process::Command, root: &Path) {
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("CODEX_HOME", root)
+        .env("COPILOT_HOME", root.join(".copilot"))
         .env("CLAUDE_CONFIG_DIR", root.join("claude"))
         .env("GEMINI_CLI_HOME", root);
 }

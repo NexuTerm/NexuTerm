@@ -300,6 +300,16 @@ async fn acp(
     key: zeroize::Zeroizing<String>,
 ) -> Result<(), ()> {
     let root = crate::agent_profile::prepare(&agent).map_err(|_| ())?;
+    let copilot = std::path::Path::new(&agent.program)
+        .file_name().is_some_and(|name| name == "copilot");
+    let mut authenticated = false;
+    if copilot {
+        let account = copilot_account(&root).await;
+        // This is the provider's remembered account, not a live token validation.
+        authenticated = account.is_some();
+        emit(&events, Event::Account(account)).await?;
+        emit(&events, Event::Authenticated(authenticated)).await?;
+    }
     let directory = if agent.directory.is_empty() {
         std::env::var("HOME").unwrap_or_else(|_| "/".into())
     } else {
@@ -379,8 +389,23 @@ async fn acp(
                     if let Some((program,args))=web_login_command(&agent){
             busy.store(true,Ordering::Relaxed);
             let login=web_login(&program,&args,&root,&events);tokio::pin!(login);
-            let result=tokio::select!{result=&mut login=>Some(result),command=commands.recv()=>match command{Some(Command::Interrupt)=>None,Some(Command::Shutdown)|None=>return Ok(()),_=>None}};
-            busy.store(false,Ordering::Relaxed);match result{Some(Ok(()))=>{if !pending.values().any(|m|m=="initialize"){request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},Some(Err(error))=>emit(&events,Event::Error(error)).await?,None=>emit(&events,Event::Status("Inicio de sesión cancelado.".into())).await?}
+            // Keep the callback receiver alive while unrelated chat controls change.
+            let result=loop {tokio::select!{
+             result=&mut login=>break Some(result),
+             command=commands.recv()=>match command{
+              Some(Command::Interrupt)=>break None,
+              Some(Command::Shutdown)|None=>return Ok(()),
+              Some(Command::Permissions(value))=>writable=value,
+              Some(Command::Login)|Some(Command::Credentials(_))=>{},
+              _=>{emit(&events,Event::Status("Completa el inicio de sesión antes de enviar mensajes.".into())).await?;}
+             }
+            }};
+            activity=tokio::time::Instant::now();
+            busy.store(false,Ordering::Relaxed);match result{Some(Ok(()))=>{
+             authenticated=true;
+             if copilot {emit(&events,Event::Account(copilot_account(&root).await)).await?;}
+             emit(&events,Event::Authenticated(true)).await?;
+             if !pending.values().any(|m|m=="initialize"){request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},Some(Err(error))=>emit(&events,Event::Error(error)).await?,None=>emit(&events,Event::Status("Inicio de sesión cancelado.".into())).await?}
           }else if let Some(method)=auth.first().and_then(|a|a["id"].as_str()){busy.store(true,Ordering::Relaxed);request(&mut input,&mut pending,&mut seq,"authenticate",json!({"methodId":method})).await?;}else{emit(&events,Event::Status("Este agente no ofrece inicio de sesión web por ACP. Configura sus credenciales en el perfil.".into())).await?;}},
           Some(Command::Interrupt)=>{stopping=true;write(&mut input,json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}})).await?;},
           Some(Command::Reply(reply))=>{let id=reply["id"].clone();if let Some(params)=permission_requests.remove(&id.to_string()){
@@ -410,11 +435,13 @@ async fn acp(
           }
           let Some(id)=frame["id"].as_u64()else{continue;};let Some(method)=pending.remove(&id)else{continue;};
           // Internal pipeline marker is translated before writing, never sent to the server.
-          if frame.get("error").is_some(){busy.store(false,Ordering::Relaxed);queued=None;emit(&events,Event::Error(format!("El agente rechazó {method} ({}). Revisa cuenta, modelo y capacidades.",frame["error"]["code"]))).await?;if method=="initialize"{return Err(());}continue;}
+          if frame.get("error").is_some(){busy.store(false,Ordering::Relaxed);queued=None;
+           if authenticated && (method=="session/new" || method=="session/prompt") {authenticated=false;emit(&events,Event::Authenticated(false)).await?;}
+           emit(&events,Event::Error(format!("El agente rechazó {method} ({}). Revisa cuenta, modelo y capacidades.",frame["error"]["code"]))).await?;if method=="initialize"{return Err(());}continue;}
           let result=&frame["result"];
           match method.as_str(){
            "initialize"=>{auth=result["authMethods"].as_array().cloned().unwrap_or_default();if want_login&&!auth.is_empty(){want_login=false;request(&mut input,&mut pending,&mut seq,"authenticate",json!({"methodId":auth[0]["id"]})).await?;}else{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},
-           "authenticate"=>{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;},
+           "authenticate"=>{authenticated=true;emit(&events,Event::Authenticated(true)).await?;request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;},
            "session/new"=>{session=result["sessionId"].as_str().ok_or(())?.into();
             let mut catalog=Vec::new();if let Some(options)=result["configOptions"].as_array(){for option in options{match option["category"].as_str().unwrap_or(""){
              "model"=>{model_option=option["id"].as_str().unwrap_or("model").into();model_current=option["currentValue"].as_str().unwrap_or("").into();collect_options(&option["options"],&mut catalog);},
@@ -435,6 +462,22 @@ async fn acp(
          _=watchdog.tick()=>{if (busy.load(Ordering::Relaxed)||!pending.is_empty())&&activity.elapsed().as_secs()>600{return Err(());}}
         }
     }
+}
+async fn copilot_account(root: &std::path::Path) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(root.join(".copilot/config.json")).await.ok()?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(65537).read_to_end(&mut bytes).await.ok()?;
+    if bytes.len() > 65536 { return None; }
+    let text = std::str::from_utf8(&bytes).ok()?;
+    // Copilot generates a // comment header followed by a JSON object.
+    let body = text.lines().skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let body = zeroize::Zeroizing::new(body);
+    let value: Value = serde_json::from_str(&body).ok()?;
+    let account = value.get("lastLoggedInUser").or_else(|| value.get("last_logged_in_user"))?;
+    let login = account["login"].as_str()?.trim();
+    if login.is_empty() || login.len() > 128 || login.chars().any(char::is_control) { return None; }
+    Some(login.into())
 }
 fn web_login_command(agent: &AiAgent) -> Option<(String, Vec<String>)> {
     let name = std::path::Path::new(&agent.program).file_name()?.to_str()?;
@@ -484,7 +527,14 @@ async fn web_login(
             }
             for word in line.split_whitespace() {
                 if word.starts_with("https://") && url::Url::parse(word).is_ok() {
-                    emit(events, Event::LoginUrl(word.into()))
+                    // Copilot already opens the browser itself. Keep a manual link without
+                    // launching a second authorization against the same callback receiver.
+                    let event = if std::path::Path::new(program).file_name().is_some_and(|name| name == "copilot") {
+                        Event::LoginLink(word.into())
+                    } else {
+                        Event::LoginUrl(word.into())
+                    };
+                    emit(events, event)
                         .await
                         .map_err(|_| "Chat cerrado")?;
                 }

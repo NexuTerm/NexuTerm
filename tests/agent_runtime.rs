@@ -138,3 +138,147 @@ fn private_terminal_bridge_only_forwards_requests_and_returns_gui_decision() {
         worker.await.unwrap();
     });
 }
+
+#[test]
+fn web_login_keeps_callback_alive_across_permissions_and_duplicate_login() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("copilot");
+    std::fs::write(
+        &program,
+        format!(
+            r#"#!/usr/bin/python3
+import json, os, socket, sys
+from pathlib import Path
+if sys.argv[1:] == ['login', '--web-flow']:
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    Path(os.environ['HOME'], 'callback-port').write_text(str(listener.getsockname()[1]))
+    print('https://github.com/login/fixture', flush=True)
+    connection, _ = listener.accept()
+    connection.close()
+    listener.close()
+    state = Path(os.environ['HOME'], '.copilot')
+    state.mkdir(exist_ok=True)
+    (state / 'config.json').write_text('// Provider-managed state\n' + json.dumps(dict(lastLoggedInUser=dict(login='fixture-user'))))
+    sys.exit(0)
+{}
+"#,
+            include_str!("../lab/acp_fixture.py")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let agent = AiAgent {
+        id: "login-fixture".into(),
+        kind: AiKind::Acp,
+        program: program.to_string_lossy().into(),
+        args: vec!["--acp".into()],
+        directory: directory.path().to_string_lossy().into(),
+        runtime_root: Some(directory.path().join("private")),
+        ..Default::default()
+    };
+    let root = nexuterm::agent_profile::root(&agent);
+    nexuterm::runtime::runtime().block_on(async {
+        let (client, mut rx) = Client::start(agent.clone(), true);
+        loop {
+            match next(&mut rx).await {
+                Event::Ready(true) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        client.login();
+        loop {
+            match next(&mut rx).await {
+                Event::LoginLink(_) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        client.permissions(false);
+        client.login();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let port: u16 = std::fs::read_to_string(root.join("callback-port"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let callback = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("Callback must survive unrelated chat commands");
+        drop(callback);
+        let mut account_seen = false;
+        let mut authenticated_seen = false;
+        loop {
+            match next(&mut rx).await {
+                Event::Account(Some(name)) => {
+                    assert_eq!(name, "fixture-user");
+                    account_seen = true;
+                }
+                Event::Authenticated(true) => authenticated_seen = true,
+                Event::Ready(true) => break,
+                Event::Error(error) => panic!("{error}"),
+                Event::Status(text) => assert!(!text.contains("cancelado")),
+                _ => {}
+            }
+        }
+        assert!(account_seen && authenticated_seen);
+        assert!(client.send("approval".into()));
+        loop {
+            match next(&mut rx).await {
+                Event::Status(text) if text.contains("solo lectura") => break,
+                Event::Request { .. } => panic!("Read-only change was lost during authentication"),
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        client.login();
+        loop {
+            match next(&mut rx).await {
+                Event::LoginLink(_) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        let port: u16 = std::fs::read_to_string(root.join("callback-port"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        client.interrupt();
+        loop {
+            match next(&mut rx).await {
+                Event::Status(text) if text.contains("cancelado") => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "Explicit cancellation must close the callback"
+        );
+        client.close();
+        let (client, mut rx) = Client::start(agent, false);
+        let mut account_seen = false;
+        let mut authenticated_seen = false;
+        loop {
+            match next(&mut rx).await {
+                Event::Account(Some(name)) => {
+                    assert_eq!(name, "fixture-user");
+                    account_seen = true;
+                }
+                Event::Authenticated(true) => authenticated_seen = true,
+                Event::Ready(true) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        assert!(
+            account_seen && authenticated_seen,
+            "Saved provider account must be restored"
+        );
+        client.close();
+    });
+}

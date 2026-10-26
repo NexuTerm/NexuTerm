@@ -343,8 +343,25 @@ def check_opencode():
         print("PASS installed OpenCode: native MCP handshake, skill discovery, primary agent and subagent")
 
 
+def check_copilot_account():
+    import hashlib
+    with tempfile.TemporaryDirectory(prefix="nexuterm-copilot-account-") as directory:
+        directory = Path(directory)
+        cli = directory / "copilot"
+        cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab/acp_fixture.py").read_text())
+        cli.chmod(0o700)
+        profile = dict(id="copilot-account", name="GitHub Copilot", kind="Acp", program=str(cli), args=["--acp"], directory=str(directory))
+        account = directory / "data/nexuterm/agents" / hashlib.sha256(profile["id"].encode()).hexdigest() / ".copilot/config.json"
+        account.parent.mkdir(parents=True)
+        account.write_text('// Provider-managed state\n' + json.dumps(dict(lastLoggedInUser=dict(login="fixture-user"))))
+        _, logs = run("provider-auth", profile, directory)
+        assert "NEXUTERM_SMOKE_PROVIDER_AUTH_HIDDEN" in logs, logs
+        print("PASS graphical Copilot account: remembered account hides login")
+
+
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_copilot_account()
     check_usage()
     check_new_chat()
     check_local()
