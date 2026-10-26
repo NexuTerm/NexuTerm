@@ -26,13 +26,25 @@ pub struct Entry {
     pub directory: bool,
     pub regular: bool,
     pub size: Option<u64>,
+    pub permissions: Option<u32>,
 }
 #[derive(Debug)]
 pub enum Request {
+    Create {
+        directory: PathBuf,
+        name: PathBuf,
+        folder: bool,
+    },
     Navigate(PathBuf),
     Next,
-    Upload { local: PathBuf, directory: PathBuf },
-    Download { remote: PathBuf, local: PathBuf },
+    Upload {
+        local: PathBuf,
+        directory: PathBuf,
+    },
+    Download {
+        remote: PathBuf,
+        local: PathBuf,
+    },
 }
 #[derive(Debug)]
 pub enum Event {
@@ -172,6 +184,38 @@ async fn worker(
                     directory = path;
                     page(&mut cursor, &directory).await
                 }
+                Request::Create {
+                    directory,
+                    name,
+                    folder,
+                } => {
+                    let path = join_remote(&directory, &name)?;
+                    let operation = async {
+                        if folder {
+                            sftp.fs()
+                                .create_dir(path)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        } else {
+                            sftp.options()
+                                .write(true)
+                                .create_new(true)
+                                .open(path)
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .close()
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    };
+                    Ok(Event::Finished(
+                        tokio::time::timeout(Duration::from_secs(30), operation)
+                            .await
+                            .map_err(|_| "Creación remota: tiempo agotado".to_owned())
+                            .and_then(|r| r),
+                    ))
+                }
                 Request::Next => page(&mut cursor, &directory).await,
                 Request::Upload { local, directory } => Ok(Event::Finished(
                     upload(sftp, local, directory, &cancel, &stop, &progress).await,
@@ -229,6 +273,7 @@ async fn page(
                 directory: entry.file_type().is_some_and(|f| f.is_dir()),
                 regular: entry.file_type().is_some_and(|f| f.is_file()),
                 size: entry.metadata().len(),
+                permissions: entry.metadata().permissions().map(|p| p.as_raw().bits()),
             });
         }
         more = entries.len() == PAGE_SIZE;
@@ -374,4 +419,54 @@ pub async fn download(
         .map_err(|_| "SFTP: cierre sin respuesta")?
         .map_err(|e| e.to_string());
     result.and(close)
+}
+
+/// Unix access bits, including setuid, setgid and sticky bits; absent metadata stays unknown.
+pub fn permission_text(mode: Option<u32>) -> String {
+    let Some(mode) = mode else {
+        return "—".into();
+    };
+    let mut text = String::with_capacity(9);
+    for (read, write, execute, special, lower, upper) in [
+        (0o400, 0o200, 0o100, 0o4000, 's', 'S'),
+        (0o040, 0o020, 0o010, 0o2000, 's', 'S'),
+        (0o004, 0o002, 0o001, 0o1000, 't', 'T'),
+    ] {
+        text.push(if mode & read != 0 { 'r' } else { '-' });
+        text.push(if mode & write != 0 { 'w' } else { '-' });
+        text.push(if mode & special != 0 {
+            if mode & execute != 0 { lower } else { upper }
+        } else if mode & execute != 0 {
+            'x'
+        } else {
+            '-'
+        });
+    }
+    text
+}
+pub fn creation_name(value: &str) -> Result<PathBuf, String> {
+    if value.trim().is_empty() || value.contains('/') || value.chars().any(char::is_control) {
+        return Err("Indica un nombre sin caracteres de control".into());
+    }
+    let path = PathBuf::from(value);
+    join_remote(std::path::Path::new("/"), &path)?;
+    Ok(path)
+}
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+    #[test]
+    fn unix_permissions_and_creation_names() {
+        assert_eq!(permission_text(Some(0o100644)), "rw-r--r--");
+        assert_eq!(permission_text(Some(0o040750)), "rwxr-x---");
+        assert_eq!(permission_text(Some(0o7754)), "rwsr-sr-T");
+        assert_eq!(permission_text(None), "—");
+        for name in ["", "  ", ".", "..", "../outside", "/absolute", "a/b", "a\n"] {
+            assert!(creation_name(name).is_err(), "{name:?}");
+        }
+        assert_eq!(
+            creation_name("archivo á ' nuevo.py").unwrap(),
+            PathBuf::from("archivo á ' nuevo.py")
+        );
+    }
 }

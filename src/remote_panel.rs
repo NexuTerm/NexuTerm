@@ -35,9 +35,14 @@ pub struct Panel {
     next: gtk::Button,
     cancel_button: gtk::Button,
     transfer: Cell<bool>,
+    hidden: gtk::ToggleButton,
     window: glib::WeakRef<gtk::ApplicationWindow>,
 }
 impl Panel {
+    pub fn apply_preferences(&self, preferences: &nexuterm::config::Preferences) {
+        crate::file_browser::apply_columns(self.widget.upcast_ref(), preferences);
+        self.hidden.set_active(preferences.browser_show_hidden);
+    }
     pub fn hide_auth_when_ready(&self, widget: &gtk::Widget) {
         *self.auth_area.borrow_mut() = Some(widget.downgrade());
     }
@@ -98,12 +103,38 @@ impl Panel {
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
         list.set_activate_on_single_click(false);
-        list.add_css_class("navigation-sidebar");
+        list.add_css_class("file-details");
+        list.set_overflow(gtk::Overflow::Hidden);
+        let (hidden, _) = crate::file_browser::hidden_controls(
+            &widget,
+            &list,
+            state.config.borrow().preferences.browser_show_hidden,
+        );
+        tools.append(&hidden);
+        let details = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let columns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        for (caption, width, expand, class) in [
+            ("Nombre", 144, true, "browser-name"),
+            ("Tipo", 70, false, "browser-type"),
+            ("Tamaño", 76, false, "browser-size"),
+            ("Permisos", 96, false, "browser-permissions"),
+        ] {
+            let label = gtk::Label::new(Some(caption));
+            label.set_xalign(0.0);
+            label.set_hexpand(expand);
+            label.set_width_request(width);
+            label.add_css_class(class);
+            columns.append(&label);
+        }
+        columns.add_css_class("detail-columns");
+        details.append(&columns);
+        details.append(&list);
         widget.append(
             &gtk::ScrolledWindow::builder()
-                .child(&list)
+                .child(&details)
+                .overlay_scrolling(false)
                 .vexpand(true)
-                .hscrollbar_policy(gtk::PolicyType::Never)
+                .hscrollbar_policy(gtk::PolicyType::Automatic)
                 .build(),
         );
         let next = gtk::Button::with_label("Página siguiente");
@@ -129,6 +160,7 @@ impl Panel {
         state.writes.borrow_mut().push(Rc::downgrade(&writing));
         let panel = Rc::new(Self {
             widget,
+            hidden,
             state: Rc::downgrade(state),
             connection: RefCell::new(None),
             auth_area: RefCell::new(None),
@@ -177,6 +209,43 @@ impl Panel {
                 p.navigate(path);
             }
         });
+        state
+            .remote_browsers
+            .borrow_mut()
+            .retain(|p| p.strong_count() > 0);
+        state
+            .remote_browsers
+            .borrow_mut()
+            .push(Rc::downgrade(&panel));
+        panel.apply_preferences(&state.config.borrow().preferences);
+        for (icon, label, folder) in [
+            ("folder-new-symbolic", "Nueva carpeta", true),
+            ("document-new-symbolic", "Nuevo archivo", false),
+        ] {
+            let button = icon_button(icon, label);
+            let weak = Rc::downgrade(&panel);
+            button.connect_clicked(move |_| {
+                if let Some(panel) = weak.upgrade()
+                    && let Some(window) = panel.window.upgrade()
+                {
+                    let directory = panel.current.borrow().clone();
+                    let weak = Rc::downgrade(&panel);
+                    crate::file_browser::create_dialog(&window, folder, move |name| {
+                        if let Some(panel) = weak.upgrade() {
+                            panel.request(
+                                Request::Create {
+                                    directory: directory.clone(),
+                                    name,
+                                    folder,
+                                },
+                                true,
+                            );
+                        }
+                    });
+                }
+            });
+            panel.tools.append(&button);
+        }
         let p = Rc::downgrade(&panel);
         panel.path.connect_activate(move |entry| {
             if let Some(p) = p.upgrade() {
@@ -309,7 +378,7 @@ impl Panel {
             Event::Finished(result) => match result {
                 Ok(()) => {
                     self.progress.set_fraction(1.0);
-                    self.status.set_text("Transferencia completada.");
+                    self.status.set_text("Operación completada.");
                     if let Some(local) = self
                         .local
                         .borrow()
@@ -361,7 +430,7 @@ impl Panel {
                 while let Some(child) = self.list.first_child() {
                     self.list.remove(&child);
                 }
-                for entry in &entries {
+                for (index, entry) in entries.iter().enumerate() {
                     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                     let icon = if entry.directory {
                         "folder-symbolic"
@@ -370,19 +439,57 @@ impl Panel {
                     } else {
                         "emblem-symbolic-link-symbolic"
                     };
-                    row.append(&gtk::Image::from_icon_name(icon));
+                    let name_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    name_cell.set_width_request(144);
+                    name_cell.set_hexpand(true);
+                    name_cell.append(&gtk::Image::from_icon_name(icon));
                     let name = gtk::Label::new(Some(&entry.name.to_string_lossy()));
                     name.set_xalign(0.0);
                     name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                     name.set_hexpand(true);
                     name.set_tooltip_text(Some(&entry.name.to_string_lossy()));
-                    row.append(&name);
-                    if let Some(size) = entry.size.filter(|_| entry.regular) {
-                        let label = gtk::Label::new(Some(&glib::format_size(size)));
-                        label.add_css_class("dim-label");
-                        row.append(&label);
+                    name_cell.append(&name);
+                    row.append(&name_cell);
+                    let kind = gtk::Label::new(Some(if entry.directory {
+                        "Carpeta"
+                    } else if entry.regular {
+                        "Archivo"
+                    } else {
+                        "Enlace / otro"
+                    }));
+                    kind.set_width_request(70);
+                    kind.set_xalign(0.0);
+                    kind.add_css_class("browser-type");
+                    row.append(&kind);
+                    let size = gtk::Label::new(
+                        entry
+                            .size
+                            .filter(|_| entry.regular)
+                            .map(glib::format_size)
+                            .as_deref(),
+                    );
+                    size.set_width_request(76);
+                    size.set_xalign(1.0);
+                    size.add_css_class("browser-size");
+                    row.append(&size);
+                    let permissions = gtk::Label::new(Some(&nexuterm::transfer::permission_text(
+                        entry.permissions,
+                    )));
+                    permissions.set_width_request(96);
+                    permissions.add_css_class("browser-permissions");
+                    permissions.add_css_class("monospace");
+                    row.append(&permissions);
+                    row.add_css_class(if index % 2 == 0 {
+                        "file-even"
+                    } else {
+                        "file-odd"
+                    });
+                    let item = gtk::ListBoxRow::new();
+                    item.set_child(Some(&row));
+                    if entry.name.as_os_str().as_encoded_bytes().starts_with(b".") {
+                        item.add_css_class("hidden-file");
                     }
-                    self.list.append(&row);
+                    self.list.append(&item);
                 }
                 self.status.set_text(&format!(
                     "{} entradas · {}",
@@ -395,11 +502,24 @@ impl Panel {
                 ));
                 self.next.set_sensitive(more);
                 *self.entries.borrow_mut() = entries;
+                if let Some(state) = self.state.upgrade() {
+                    crate::file_browser::apply_columns(
+                        self.widget.upcast_ref(),
+                        &state.config.borrow().preferences,
+                    );
+                }
+                self.list.invalidate_filter();
                 #[cfg(debug_assertions)]
                 if let Some(path) = std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR")
-                    && self.smoke_step.replace(1) == 0 {
+                    && self.smoke_step.replace(1) == 0
+                {
                     let path = PathBuf::from(path);
-                    let index = self.entries.borrow().iter().position(|e| Some(e.name.as_os_str()) == path.file_name()).unwrap();
+                    let index = self
+                        .entries
+                        .borrow()
+                        .iter()
+                        .position(|e| Some(e.name.as_os_str()) == path.file_name())
+                        .unwrap();
                     let row = self.list.row_at_index(index as i32).unwrap();
                     self.list.select_row(Some(&row));
                     self.list.emit_by_name::<()>("row-activated", &[&row]);
@@ -520,24 +640,39 @@ impl Panel {
         }
     }
     fn edit(self: &Rc<Self>, remote: PathBuf) {
-        if self.busy.get() { return; }
-        let Some(connection) = self.connection.borrow().clone() else { return; };
+        if self.busy.get() {
+            return;
+        }
+        let Some(connection) = self.connection.borrow().clone() else {
+            return;
+        };
         self.set_busy(true);
-        self.status.set_text("Descargando una copia temporal para editar…");
+        self.status
+            .set_text("Descargando una copia temporal para editar…");
         let panel = Rc::downgrade(self);
-        let task = nexuterm::runtime::runtime().spawn(nexuterm::remote_edit::RemoteDocument::open(connection, remote));
+        let task = nexuterm::runtime::runtime().spawn(nexuterm::remote_edit::RemoteDocument::open(
+            connection, remote,
+        ));
         glib::spawn_future_local(async move {
             let result = task.await.map_err(|e| e.to_string()).and_then(|r| r);
-            let Some(panel) = panel.upgrade() else { return; };
+            let Some(panel) = panel.upgrade() else {
+                return;
+            };
             panel.set_busy(false);
             match result {
                 Ok(document) => {
-                    if let (Some(state), Some(window)) = (panel.state.upgrade(), panel.window.upgrade()) {
-                        panel.status.set_text("Copia temporal abierta; Guardar vuelve a subirla por SCP.");
+                    if let (Some(state), Some(window)) =
+                        (panel.state.upgrade(), panel.window.upgrade())
+                    {
+                        panel
+                            .status
+                            .set_text("Copia temporal abierta; Guardar vuelve a subirla por SCP.");
                         crate::files::remote_editor(&state, &window, document);
                     }
                 }
-                Err(error) => panel.status.set_text(&format!("No se pudo editar: {error}")),
+                Err(error) => panel
+                    .status
+                    .set_text(&format!("No se pudo editar: {error}")),
             }
         });
     }

@@ -43,7 +43,7 @@ fn release_mount(key: &str) -> Option<gio::Mount> {
     })
 }
 
-const ATTRIBUTES: &str = "standard::name,standard::type,standard::size";
+const ATTRIBUTES: &str = "standard::name,standard::type,standard::size,unix::mode";
 const PRIORITY: glib::Priority = glib::Priority::DEFAULT;
 
 fn file(profile: &Profile, path: &Path) -> Result<gio::File, String> {
@@ -145,6 +145,9 @@ async fn page(
             directory: info.file_type() == gio::FileType::Directory,
             regular: info.file_type() == gio::FileType::Regular,
             size: u64::try_from(info.size()).ok(),
+            permissions: info
+                .has_attribute("unix::mode")
+                .then(|| info.attribute_uint32("unix::mode")),
         });
     }
     Ok(Event::Page {
@@ -349,6 +352,38 @@ pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<S
                             &lifetime,
                         )
                         .await
+                    }
+                    Request::Create {
+                        directory,
+                        name,
+                        folder,
+                    } => {
+                        let path = nexuterm::ssh::join_remote(&directory, &name)?;
+                        let destination = file(&profile, &path)?;
+                        let result = if folder {
+                            operation(
+                                destination.make_directory_future(PRIORITY),
+                                &channels,
+                                &lifetime,
+                            )
+                            .await
+                        } else {
+                            match operation(
+                                destination.create_future(gio::FileCreateFlags::NONE, PRIORITY),
+                                &channels,
+                                &lifetime,
+                            )
+                            .await
+                            {
+                                Ok(stream) => {
+                                    operation(stream.close_future(PRIORITY), &channels, &lifetime)
+                                        .await
+                                        .map(|_| ())
+                                }
+                                Err(error) => Err(error),
+                            }
+                        };
+                        Ok(Event::Finished(result))
                     }
                     Request::Upload { local, directory } => {
                         let name = local.file_name().ok_or("Archivo local inválido")?;

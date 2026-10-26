@@ -527,20 +527,38 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
     );
     let side = gtk::CheckButton::with_label("Mostrar explorador al iniciar");
     side.set_active(current.sidebar_visible);
-    grid.attach(&side, 0, 3, 2, 1);
+
     let external = gtk::CheckButton::with_label("Abrir archivos con la aplicación del sistema");
     external.set_active(current.files_use_system_app);
-    grid.attach(&external, 0, 4, 2, 1);
+
     let numbers = gtk::CheckButton::with_label("Mostrar números de línea en el editor");
     numbers.set_active(current.editor_line_numbers);
-    grid.attach(&numbers, 0, 5, 2, 1);
+    grid.attach(&numbers, 0, 3, 2, 1);
+    let browser = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    for set in [gtk::Widget::set_margin_top, gtk::Widget::set_margin_bottom, gtk::Widget::set_margin_start, gtk::Widget::set_margin_end] { set(browser.upcast_ref(), 24); }
+    browser.append(&side); browser.append(&external);
+    let hidden = gtk::CheckButton::with_label("Mostrar archivos ocultos al abrir el navegador");
+    hidden.set_active(current.browser_show_hidden); browser.append(&hidden);
+    let columns_title = gtk::Label::new(Some("Columnas de la vista de detalles")); columns_title.set_xalign(0.0); columns_title.add_css_class("heading"); browser.append(&columns_title);
+    let name_column = gtk::CheckButton::with_label("Nombre (siempre visible)"); name_column.set_active(true); name_column.set_sensitive(false); browser.append(&name_column);
+    let type_column = gtk::CheckButton::with_label("Tipo"); type_column.set_active(current.browser_show_type); browser.append(&type_column);
+    let size_column = gtk::CheckButton::with_label("Tamaño"); size_column.set_active(current.browser_show_size); browser.append(&size_column);
+    let permissions_column = gtk::CheckButton::with_label("Permisos"); permissions_column.set_active(current.browser_show_permissions); browser.append(&permissions_column);
+    let help = gtk::Label::new(Some("Ctrl+H o el botón del ojo alternan los ocultos en el panel enfocado. La terminal conserva su atajo de teclado.")); help.set_wrap(true); help.set_xalign(0.0); help.add_css_class("dim-label"); browser.append(&help);
+    let tabs = gtk::Notebook::new();
+    tabs.append_page(&grid, Some(&gtk::Label::new(Some("General"))));
+    tabs.append_page(&browser, Some(&gtk::Label::new(Some("Navegador"))));
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12); content.append(&tabs);
+    let footer = gtk::Box::new(gtk::Orientation::Vertical, 8); footer.set_margin_start(24); footer.set_margin_end(24); footer.set_margin_bottom(18);
+    content.append(&footer);
     let error = gtk::Label::new(None);
     error.set_wrap(true);
-    grid.attach(&error, 0, 6, 2, 1);
+    footer.append(&error);
     let save = gtk::Button::with_label("Guardar");
     save.add_css_class("suggested-action");
     save.set_sensitive(state.config_writable);
-    grid.attach(&save, 1, 7, 1, 1);
+    save.set_halign(gtk::Align::End);
+    footer.append(&save);
     let s = Rc::downgrade(state);
     let d = dialog.downgrade();
     save.connect_clicked(move |_| {
@@ -579,6 +597,10 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
         config.preferences.sidebar_visible = side.is_active();
         config.preferences.files_use_system_app = external.is_active();
         config.preferences.editor_line_numbers = numbers.is_active();
+        config.preferences.browser_show_hidden = hidden.is_active();
+        config.preferences.browser_show_type = type_column.is_active();
+        config.preferences.browser_show_size = size_column.is_active();
+        config.preferences.browser_show_permissions = permissions_column.is_active();
         if let Err(e) = config::save(&s.path, &config) {
             error.set_text(&e);
             return;
@@ -593,10 +615,12 @@ fn preferences(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             }
         }
         *s.config.borrow_mut() = config;
+        apply_browser_preferences(&s);
+        s.sidebar_area.set_visible(side.is_active());
         if let Some(d) = d.upgrade() {
             d.close();
         }
     });
-    dialog.set_child(Some(&grid));
+    dialog.set_child(Some(&content));
     dialog.present();
 }

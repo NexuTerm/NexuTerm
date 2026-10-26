@@ -221,6 +221,7 @@ pub fn parse(data: &[u8]) -> Result<Vec<Entry>, String> {
             directory,
             regular: !directory,
             size,
+            permissions: None,
         });
     }
     entries.sort_by(|a, b| {
@@ -287,6 +288,7 @@ pub async fn transfer(
             (path, Action::Upload(local), Some(total))
         }
         Request::Download { remote, local } => (remote, Action::Download(local), None),
+        Request::Create { .. } => return Err("Este servidor FTP heredado no admite crear desde este navegador".into()),
         _ => return Err("Operación FTP inválida".into()),
     };
     channels.progress.send_replace(Progress { bytes: 0, total });

@@ -52,6 +52,10 @@ pub struct Preferences {
     pub scrollback: u32,
     pub sidebar_visible: bool,
     pub files_use_system_app: bool,
+    pub browser_show_hidden: bool,
+    pub browser_show_type: bool,
+    pub browser_show_size: bool,
+    pub browser_show_permissions: bool,
     pub editor_line_numbers: bool,
     pub monitor_interval: u64,
     pub shortcuts: std::collections::BTreeMap<String, String>,
@@ -68,6 +72,10 @@ impl Default for Preferences {
             scrollback: 10000,
             sidebar_visible: true,
             files_use_system_app: false,
+            browser_show_hidden: false,
+            browser_show_type: true,
+            browser_show_size: true,
+            browser_show_permissions: true,
             editor_line_numbers: true,
             monitor_interval: 5,
             shortcuts: Default::default(),
@@ -362,12 +370,20 @@ mod tests {
         let mut preferences: super::Preferences = serde_json::from_str("{}").unwrap();
         assert!(!preferences.files_use_system_app);
         assert!(preferences.editor_line_numbers);
+        assert!(!preferences.browser_show_hidden);
+        assert!(preferences.browser_show_type && preferences.browser_show_size && preferences.browser_show_permissions);
+        preferences.browser_show_hidden = true;
+        preferences.browser_show_type = false;
+        preferences.browser_show_size = false;
+        preferences.browser_show_permissions = false;
         preferences.files_use_system_app = true;
         preferences.editor_line_numbers = false;
         let json = serde_json::to_string(&preferences).unwrap();
         let restored: super::Preferences = serde_json::from_str(&json).unwrap();
         assert!(restored.files_use_system_app);
         assert!(!restored.editor_line_numbers);
+        assert!(restored.browser_show_hidden);
+        assert!(!restored.browser_show_type && !restored.browser_show_size && !restored.browser_show_permissions);
     }
 
 

@@ -20,6 +20,8 @@ pub struct State {
     connections_side: gtk::Box,
     local_directory: RefCell<Option<(glib::WeakRef<vte4::Terminal>, PathBuf)>>,
     local_files: RefCell<Option<Rc<crate::file_browser::LocalPane>>>,
+    pub(crate) local_browsers: RefCell<Vec<Weak<crate::file_browser::LocalPane>>>,
+    pub(crate) remote_browsers: RefCell<Vec<Weak<crate::remote_panel::Panel>>>,
     sidebar_area: gtk::Box,
     sidebar_stack: gtk::Stack,
     remote_panels: RefCell<Vec<(glib::WeakRef<gtk::Widget>, glib::WeakRef<gtk::Box>)>>,
@@ -66,6 +68,10 @@ mod ai_dictation;
 mod sessions;
 pub(crate) use actions::icon_button;
 use actions::install_actions;
+
+impl State {
+    pub(crate) fn window(&self) -> Option<gtk::ApplicationWindow> { self.window.upgrade() }
+}
 
 impl Session {
     fn stop(&self) {
@@ -285,6 +291,8 @@ pub fn build(app: &gtk::Application) {
         connections_side: side.clone(),
         local_directory: RefCell::new(None),
         local_files: RefCell::new(None),
+        local_browsers: RefCell::new(Vec::new()),
+        remote_browsers: RefCell::new(Vec::new()),
         sidebar_area: sidebar_area.clone(),
         sidebar_stack,
         remote_panels: RefCell::new(Vec::new()),
@@ -702,9 +710,10 @@ pub fn build(app: &gtk::Application) {
             || std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
         {
             20
-        } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals")) {
+        } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals"|"new-chat")) {
             10
         } else if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_BROWSER_FEATURES").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
             8
         } else {
@@ -1833,4 +1842,14 @@ pub(crate) fn open_local_file(state: &Rc<State>, path: PathBuf) {
     } else if let Some(window) = state.window.upgrade() {
         crate::files::editor(state, &window, file);
     }
+}
+
+pub(crate) fn apply_browser_preferences(state: &State) {
+    let preferences = state.config.borrow().preferences.clone();
+    state.local_browsers.borrow_mut().retain(|weak| {
+        if let Some(pane) = weak.upgrade() { pane.apply_preferences(&preferences); true } else { false }
+    });
+    state.remote_browsers.borrow_mut().retain(|weak| {
+        if let Some(pane) = weak.upgrade() { pane.apply_preferences(&preferences); true } else { false }
+    });
 }

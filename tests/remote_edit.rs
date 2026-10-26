@@ -51,6 +51,74 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
         .spawn()
         .unwrap();
     connection.ready().await.unwrap();
+    let mut client = nexuterm::transfer::Client::start(connection.clone());
+    let directory = root.join("remote");
+    for (name, folder) in [("created-dir", true), ("created-file.txt", false)] {
+        client
+            .requests
+            .send(nexuterm::transfer::Request::Create {
+                directory: directory.clone(),
+                name: name.into(),
+                folder,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            client.events.recv().await.unwrap(),
+            nexuterm::transfer::Event::Finished(Ok(()))
+        ));
+        assert_eq!(directory.join(name).is_dir(), folder);
+    }
+    tokio::fs::write(directory.join("created-file.txt"), "keep original")
+        .await
+        .unwrap();
+    client
+        .requests
+        .send(nexuterm::transfer::Request::Create {
+            directory: directory.clone(),
+            name: "created-file.txt".into(),
+            folder: false,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.events.recv().await.unwrap(),
+        nexuterm::transfer::Event::Finished(Err(_))
+    ));
+    assert_eq!(
+        tokio::fs::read_to_string(directory.join("created-file.txt"))
+            .await
+            .unwrap(),
+        "keep original"
+    );
+    client
+        .requests
+        .send(nexuterm::transfer::Request::Navigate(directory))
+        .await
+        .unwrap();
+    match client.events.recv().await.unwrap() {
+        nexuterm::transfer::Event::Page { entries, .. } => {
+            assert!(
+                entries
+                    .iter()
+                    .find(|e| e.name == std::path::Path::new("created-dir"))
+                    .unwrap()
+                    .permissions
+                    .is_some()
+            );
+            assert!(
+                entries
+                    .iter()
+                    .find(|e| e.name == std::path::Path::new("created-file.txt"))
+                    .unwrap()
+                    .permissions
+                    .is_some()
+            );
+        }
+        other => panic!("Unexpected listing: {other:?}"),
+    }
+    client.stop();
+
     let remote = root.join("remote").join("á ' $(echo unsafe) example.py");
     let original = "def value():\n    return 1\n";
     tokio::fs::write(&remote, original).await.unwrap();
