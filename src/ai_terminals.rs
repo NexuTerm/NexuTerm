@@ -1,7 +1,8 @@
-//! GTK side of the terminal MCP bridge. Never execute a model request silently.
+//! GTK side of the terminal MCP bridge. Operations require explicit or remembered approval.
 use super::*;
 use nexuterm::terminal_mcp::{Broker, Request, result};
 use serde_json::json;
+type Grants = Rc<RefCell<std::collections::HashMap<String, Rc<RefCell<nexuterm::approval_grants::Grants>>>>>;
 fn sessions(state: &State) -> Vec<Rc<Session>> {
     state
         .sessions
@@ -39,6 +40,7 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
         }
     };
     let s = Rc::downgrade(state);
+    let grants: Grants = Rc::new(RefCell::new(std::collections::HashMap::new()));
     glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
         let Some(state) = s.upgrade() else {
             return glib::ControlFlow::Break;
@@ -47,7 +49,7 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
             let Ok(request) = requests.try_recv() else {
                 break;
             };
-            handle(&state, request);
+            handle(&state, request, &grants);
         }
         glib::ControlFlow::Continue
     });
@@ -60,7 +62,7 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
     }
     Some(broker)
 }
-fn handle(state: &Rc<State>, request: Request) {
+fn handle(state: &Rc<State>, request: Request, policies: &Grants) {
     let targets = sessions(state);
     let active = state.focused_terminal.borrow().upgrade();
     if request.name == "terminal_list" {
@@ -134,6 +136,32 @@ fn handle(state: &Rc<State>, request: Request) {
             target.title
         )
     };
+    let policy = {
+        let config = state.config.borrow();
+        let mut agents = config.ai_agents.iter().filter(|agent| agent.name == request.agent);
+        let agent = agents.next().filter(|_| agents.next().is_none());
+        agent.map(|agent| policies.borrow_mut().entry(agent.id.clone()).or_insert_with(||
+            Rc::new(RefCell::new(nexuterm::approval_grants::Grants::new(nexuterm::agent_profile::root(agent))))).clone())
+    };
+    let operation = json!({"tool":request.name,"command":command});
+    let terminal = target.terminal.upgrade();
+    let cwd = terminal.as_ref().and_then(|term|term.current_directory_uri()).filter(|uri| {
+        target.connection.as_ref().is_none_or(|connection| url::Url::parse(uri).ok().and_then(|uri|uri.host_str().map(String::from)).is_some_and(|host|host == connection.profile.host))
+    }).map(|uri|uri.to_string())
+        .or_else(|| if target.connection.is_none() { target.pid.get().and_then(|pid|std::fs::read_link(format!("/proc/{pid}/cwd")).ok()).map(|path|path.to_string_lossy().into_owned()) } else { None });
+    let session_key = nexuterm::approval_grants::fingerprint(&json!({"operation":operation,"terminal":target.id,"cwd":cwd}));
+    let destination_key = target.connection.as_ref().map(|connection|json!({"id":connection.profile.id,"host":connection.profile.host,"port":connection.profile.port,"username":connection.profile.username,"jump":connection.profile.jump_host})).unwrap_or_else(||json!({"local":true,"program":target.spec.program,"args":target.spec.args}));
+    // Do not remember command execution across restarts without a known directory.
+    let persistent_key = (!execute || cwd.is_some()).then(|| nexuterm::approval_grants::fingerprint(&json!({"operation":operation,"destination":destination_key,"cwd":cwd})));
+    let remembered = policy.as_ref().is_some_and(|policy| {
+        let policy = policy.borrow();
+        policy.allows(&session_key) || persistent_key.as_ref().is_some_and(|key|policy.allows(key))
+    });
+    let mut buttons = vec!["Rechazar", "Permitir una vez"];
+    if policy.is_some() {
+        buttons.push("Permitir en esta sesión");
+        if persistent_key.is_some() { buttons.push("Permitir siempre"); }
+    }
     let dialog = gtk::AlertDialog::builder()
         .message(format!(
             "{} solicita {}",
@@ -144,49 +172,64 @@ fn handle(state: &Rc<State>, request: Request) {
                 "leer una terminal"
             }
         ))
-        .detail(detail)
-        .buttons(["Rechazar", "Permitir una vez"])
+        .detail(format!("{detail}\n\nLos permisos recordados se limitan a esta operación y destino. Ejecutar siempre requiere conocer la carpeta de trabajo."))
+        .buttons(buttons)
         .cancel_button(0)
         .default_button(0)
         .build();
     #[cfg(debug_assertions)]
     if request.agent == "NexuTerm smoke"
         && std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("terminals")
-        && target.title == "Remoto de prueba"
+        && target.title == "Remoto de prueba" && !remembered
     {
+        let selected_label = if execute {"Permitir una vez"} else {"Permitir en esta sesión"};
         glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
-            fn click(widget: &gtk::Widget) -> bool {
+            fn click(widget: &gtk::Widget, selected_label: &str) -> bool {
                 if let Some(button) = widget.downcast_ref::<gtk::Button>()
-                    && button.label().is_some_and(|s| s == "Permitir una vez") {
+                    && button.label().is_some_and(|s| s == selected_label) {
                         button.emit_clicked();
                         return true;
                     }
                 let mut child = widget.first_child();
                 while let Some(widget) = child {
                     child = widget.next_sibling();
-                    if click(&widget) {
+                    if click(&widget, selected_label) {
                         return true;
                     }
                 }
                 false
             }
             assert!(
-                gtk::Window::list_toplevels().iter().any(click),
+                gtk::Window::list_toplevels().iter().any(|window|click(window,selected_label)),
                 "Terminal approval dialog was not shown"
             );
         });
     }
+    #[cfg(debug_assertions)]
+    if remembered && std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("terminals") { eprintln!("NEXUTERM_SMOKE_TERMINAL_GRANT_USED"); }
     let target = Rc::downgrade(&target);
     glib::spawn_future_local(async move {
-        let accepted = dialog.choose_future(Some(&parent)).await == Ok(1);
+        let choice = if remembered { Ok(1) } else { dialog.choose_future(Some(&parent)).await };
         if request.response.is_closed() {
             return;
         }
-        if !accepted {
+        if !matches!(choice, Ok(1..=3)) {
             let _ = request
                 .response
                 .send(result("El usuario rechazó la operación".into(), true));
             return;
+        }
+        if let Some(policy) = &policy {
+            let grant = match choice {
+                Ok(2) => Some((session_key, false)),
+                Ok(3) => persistent_key.map(|key|(key,true)),
+                _ => None,
+            };
+            if let Some((key, always)) = grant
+                && let Err(error) = policy.borrow_mut().remember(key, always) {
+                    let _ = request.response.send(result(error, true));
+                    return;
+                }
         }
         let Some(target) = target.upgrade().filter(|t| t.pid.get().is_some()) else {
             let _ = request.response.send(result(
@@ -281,6 +324,8 @@ fn smoke(state: &Rc<State>, broker: &Rc<Broker>) {
                     .unwrap()
                     .contains("RECIBIDO: printf NEXUTERM_TERMINAL_TEST")
             );
+            let repeated = nexuterm::terminal_mcp::call(&socket, "NexuTerm smoke", "terminal_read", json!({"terminal_id":id})).await.unwrap();
+            assert_eq!(repeated["isError"], false);
         });
         glib::spawn_future_local(async move {
             while !worker.is_finished() {

@@ -119,8 +119,16 @@ El selector **Solo lectura / Pedir permiso** está dentro del editor, junto al m
 Los controles de acceso son compactos; usuario y cierre de sesión comparten fila.
 Los avisos rutinarios de agente listo y respuesta completada no ocupan una fila.
 
-Las aprobaciones del agente permiten seguir usando la aplicación y se retiran al
-responder o al resolverse.
+Las aprobaciones ofrecen **Permitir una vez**, **Permitir en esta sesión** y
+**Permitir siempre** para la misma operación exacta y carpeta de ese agente.
+Los permisos de sesión del chat desaparecen al cerrar o cambiar su conexión;
+los de terminal duran mientras está abierta la aplicación y se limitan a esa
+terminal y carpeta. Los persistentes se guardan como huellas, sin comandos ni
+credenciales, en `permission-grants.json` dentro del directorio privado de cada
+agente. Para revocarlos, elimina ese archivo con la aplicación cerrada.
+Los permisos de terminal persistentes incluyen el destino y solo se ofrecen para
+ejecutar cuando se conoce su carpeta de trabajo. Las aprobaciones del agente
+permiten seguir usando la aplicación y se retiran al responder o al resolverse.
 
 Cada perfil tiene su directorio privado bajo `$XDG_DATA_HOME/nexuterm/agents/`.
 Su autenticación y extensiones no se comparten con otros perfiles ni se copian desde
@@ -133,7 +141,8 @@ permitido en loopback; el resto requiere HTTPS con validación TLS.
 Con **Acceso a terminales** activado, los agentes compatibles reciben herramientas
 para listar terminales abiertas, leer su pantalla y enviar comandos. Pueden elegir
 la última terminal activa o una sesión concreta, local o SSH. Leer o ejecutar exige
-aprobación gráfica con el agente, destino y operación. Los comandos se envían a la
+aprobación gráfica con el agente, destino y operación, salvo que coincida con un
+permiso recordado explícitamente. Los comandos se envían a la
 sesión existente: la confirmación indica que se han enviado, no que hayan terminado
 correctamente. Las API compatibles reciben estas herramientas como funciones;
 los agentes nativos las reciben mediante un servidor MCP privado.

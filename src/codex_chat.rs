@@ -169,9 +169,11 @@ fn request_dialog(
     client: Rc<Client>,
     id: Value,
     method: &str,
-    params: Value,
+    mut params: Value,
     item: Option<&Value>,
     dialogs: &Dialogs,
+    workspace: &str,
+    grants: &Rc<RefCell<nexuterm::approval_grants::Grants>>,
 ) {
     let approval = matches!(
         method,
@@ -181,6 +183,9 @@ fn request_dialog(
     if !approval && !question {
         client.reject_unknown(id);
         return;
+    }
+    if method == "item/fileChange/requestApproval" && !params["cwd"].is_string() {
+        params["cwd"] = json!(workspace);
     }
     let mut detail = json!({"request":params});
     if let Some(item) = item {
@@ -204,6 +209,11 @@ fn request_dialog(
         || (method == "item/fileChange/requestApproval" && item.is_none())
     {
         client.reply(id, json!({"decision":"decline"}));
+        return;
+    }
+    let key = approval.then(|| nexuterm::approval_grants::operation(method, &params, item)).flatten();
+    if key.as_ref().is_some_and(|key| grants.borrow().allows(key)) {
+        client.reply(id, json!({"decision":"accept"}));
         return;
     }
     let window = gtk::Window::builder()
@@ -253,7 +263,7 @@ fn request_dialog(
         }
     } else {
         let label = gtk::Label::new(Some(
-            "Revisa la operación completa antes de autorizarla. La aprobación se aplica solo a esta solicitud.",
+            "Revisa la operación completa. Los permisos recordados se aplican solo a esta misma operación, carpeta y agente.",
         ));
         label.set_wrap(true);
         body.append(&label);
@@ -278,8 +288,9 @@ fn request_dialog(
             )
         } else {
             format!(
-                "Cambios solicitados\n{}\n\nRaíz de escritura solicitada: {}\n{}",
+                "Cambios solicitados\n{}\n\nCarpeta: {}\nRaíz de escritura solicitada: {}\n{}",
                 item.map(file_changes).unwrap_or_default(),
+                workspace,
                 params["grantRoot"].as_str().unwrap_or("sin ampliación"),
                 params["reason"].as_str().unwrap_or("")
             )
@@ -312,6 +323,9 @@ fn request_dialog(
     buttons.append(&reject);
     buttons.append(&accept);
     root.append(&buttons);
+    let grant_error = gtk::Label::new(None);
+    grant_error.set_wrap(true);
+    root.append(&grant_error);
     window.set_child(Some(&root));
     let done = Rc::new(Cell::new(false));
     dialogs
@@ -344,6 +358,27 @@ fn request_dialog(
             w.close();
         }
     });
+    if approval {
+        let remembered = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        for (label, always) in [("Permitir en esta sesión", false), ("Permitir siempre", true)] {
+            let button = gtk::Button::with_label(label);
+            button.set_sensitive(key.is_some());
+            button.set_tooltip_text(Some("Solo esta operación exacta, en esta carpeta y para este agente"));
+            remembered.append(&button);
+            let done = done.clone(); let client = client.clone(); let id = id.clone();
+            let weak = window.downgrade(); let grants = grants.clone(); let key = key.clone();
+            let error = grant_error.clone();
+            button.connect_clicked(move |_| {
+                if done.get() { return; }
+                let Some(key) = key.clone() else { return; };
+                if let Err(message) = grants.borrow_mut().remember(key, always) { error.set_text(&message); return; }
+                done.set(true);
+                client.reply(id.clone(), json!({"decision":"accept"}));
+                if let Some(window) = weak.upgrade() { window.close(); }
+            });
+        }
+        root.append(&remembered);
+    }
     let weak = window.downgrade();
     reject.connect_clicked(move |_| {
         if let Some(w) = weak.upgrade() {
@@ -367,7 +402,7 @@ fn request_dialog(
     });
     window.present();
     #[cfg(debug_assertions)]
-    if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat")) {
+    if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat" | "approval-session" | "approval-always")) {
         let weak = window.downgrade();
         let reject = reject.downgrade();
         let accept = accept.downgrade();
@@ -391,6 +426,17 @@ fn request_dialog(
                         assert!(!window.is_modal());
                         accept.upgrade().unwrap().emit_clicked();
                         eprintln!("NEXUTERM_SMOKE_CODEX_APPROVAL_ACCEPTED");
+                    }
+                    Ok(mode @ ("approval-session" | "approval-always")) => {
+                        fn choose(widget: &gtk::Widget, label: &str) -> bool {
+                            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                                && button.label().is_some_and(|text|text == label) { button.emit_clicked(); return true; }
+                            let mut child = widget.first_child();
+                            while let Some(widget) = child { child=widget.next_sibling(); if choose(&widget,label) { return true; } }
+                            false
+                        }
+                        assert!(choose(window.upcast_ref(), if mode == "approval-session" {"Permitir en esta sesión"} else {"Permitir siempre"}));
+                        eprintln!("NEXUTERM_SMOKE_CODEX_APPROVAL_REMEMBERED");
                     }
                     _ => if let Some(reject) = reject.upgrade() {
                         reject.emit_clicked();
@@ -806,6 +852,8 @@ Puede solicitar permiso para leerlas.",
             let mut items: HashMap<String, Value> = HashMap::new();
             let welcome = welcome.clone();
             let agent_name = agent.name.clone();
+            let grants = Rc::new(RefCell::new(nexuterm::approval_grants::Grants::new(nexuterm::agent_profile::root(&agent))));
+            let grant_workspace = if agent.directory.is_empty() {std::env::var("HOME").unwrap_or_else(|_|"/".into())} else {agent.directory.clone()};
             let api_profile = agent.kind.is_api();
             let codex_profile = agent.is_codex();
             let configured_models = agent.models.clone();
@@ -847,6 +895,7 @@ Puede solicitar permiso para leerlas.",
                     match event {
                         Event::Authenticated(value) => {
                             provider_authenticated = value;
+                            if !value { grants.borrow_mut().clear_session(); }
                             if let Some(button) = login_button.upgrade() {
                                 button.set_visible(!(api_profile || provider_authenticated || codex_profile && ready));
                                 #[cfg(debug_assertions)]
@@ -997,6 +1046,7 @@ Puede solicitar permiso para leerlas.",
                             }
                         }
                         Event::Ready(authenticated) => {
+                            if !authenticated { grants.borrow_mut().clear_session(); }
                             if let Some(link) = logout.upgrade() {
                                 link.set_visible(codex_profile && authenticated);
                             }
@@ -1166,6 +1216,8 @@ Puede solicitar permiso para leerlas.",
                                     params,
                                     detail,
                                     &dialogs,
+                                    &grant_workspace,
+                                    &grants,
                                 );
                             } else {
                                 client.reject_unknown(id);
@@ -1173,7 +1225,7 @@ Puede solicitar permiso para leerlas.",
                         }
                         Event::Finished(status) => {
                             #[cfg(debug_assertions)]
-                            if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("approval-repeat")) {
+                            if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("approval-repeat" | "approval-session" | "approval-always")) {
                                 assert!(dialogs.borrow().is_empty(), "Resolved approval windows must be removed");
                                 eprintln!("NEXUTERM_SMOKE_APPROVALS_FINISHED");
                             }
@@ -1318,7 +1370,7 @@ Puede solicitar permiso para leerlas.",
     #[cfg(debug_assertions)]
     if matches!(
         std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
-        Ok("codex" | "codex-approval" | "approval-repeat" | "acp" | "api" | "shutdown" | "switch")
+        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "acp" | "api" | "shutdown" | "switch")
     ) {
         let input = composer.downgrade();
         let send = send.downgrade();
@@ -1346,7 +1398,7 @@ Puede solicitar permiso para leerlas.",
                         row.set_visible(true);
                     }
                     input.buffer().set_text(
-                        if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat")) {
+                        if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat" | "approval-session" | "approval-always")) {
                             "approval"
                         } else if matches!(
                             std::env::var("NEXUTERM_SMOKE_AI").as_deref(),

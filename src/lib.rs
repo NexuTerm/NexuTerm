@@ -23,3 +23,6 @@ pub mod vnc;
 pub mod remote_edit;
 
 pub mod ai_usage;
+
+#[cfg(feature = "gui")]
+pub mod approval_grants;

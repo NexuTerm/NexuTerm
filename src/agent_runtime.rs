@@ -424,8 +424,10 @@ async fn acp(
            if frame.get("id").is_some(){let id=frame["id"].clone();if method=="session/request_permission"{
             if permission_requests.len()>=8{return Err(());}
             permission_requests.insert(id.to_string(),params.clone());let operation=serde_json::to_string_pretty(&params["toolCall"]).unwrap_or_default();
+            let mut permission_operation=params["toolCall"].clone();
+            if let Some(operation)=permission_operation.as_object_mut(){for field in ["toolCallId","status","content"]{operation.remove(field);}}
             if !writable{write(&mut input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}})).await?;permission_requests.remove(&id.to_string());emit(&events,Event::Status("Herramienta rechazada: conversación de solo lectura.".into())).await?;}
-            else{emit(&events,Event::Request{id,method:"item/commandExecution/requestApproval".into(),params:json!({"command":operation,"cwd":directory,"reason":"Solicitud de herramienta del agente ACP; revisa su entrada completa."})}).await?;}
+            else{emit(&events,Event::Request{id,method:"item/commandExecution/requestApproval".into(),params:json!({"command":operation,"approvalOperation":permission_operation,"cwd":directory,"reason":"Solicitud de herramienta del agente ACP; revisa su entrada completa."})}).await?;}
            }else{write(&mut input,json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Unsupported client capability"}})).await?;}continue;}
            if method=="session/update"{let update=&params["update"];match update["sessionUpdate"].as_str().unwrap_or(""){
             "usage_update"=>{if let (Some(used),Some(size))=(update["used"].as_u64(),update["size"].as_u64()){emit(&events,Event::ContextUsage{used,size}).await?;}},

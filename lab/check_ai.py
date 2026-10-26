@@ -98,10 +98,11 @@ def check_api(kind):
 
 def check_terminals():
     with tempfile.TemporaryDirectory(prefix="nexuterm-ai-terminals-") as directory:
-        profile = dict(id="terminals", name="Terminales de prueba", kind="Responses",
+        profile = dict(id="terminals", name="NexuTerm smoke", kind="Responses",
                        endpoint="http://127.0.0.1:1/v1", model="fixture")
         _, logs = run("terminals", profile, Path(directory))
         assert "NEXUTERM_SMOKE_TERMINALS_OK" in logs, logs
+        assert "NEXUTERM_SMOKE_TERMINAL_GRANT_USED" in logs, logs
         print("PASS terminal bridge: two simulated sessions, explicit execution/read approval")
 
 
@@ -355,6 +356,8 @@ def check_repeated_approvals(mode):
         assert "NEXUTERM_SMOKE_APPROVALS_FINISHED" in logs, logs
         if mode == "approval-repeat":
             assert logs.count("NEXUTERM_SMOKE_CODEX_APPROVAL_ACCEPTED") == 2, logs
+        else:
+            assert logs.count("NEXUTERM_SMOKE_CODEX_APPROVAL_REMEMBERED") == 1, logs
         trace = [json.loads(line) for line in (directory / "protocol.jsonl").read_text().splitlines()]
         replies = [r for r in trace if isinstance(r.get("id"), str) and r["id"].startswith("approval-")]
         assert len(replies) == 2 and all(r["result"]["decision"] == "accept" for r in replies)
@@ -393,7 +396,7 @@ def check_copilot_account():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
-    for mode in ("approval-repeat",):
+    for mode in ("approval-repeat", "approval-session", "approval-always"):
         check_repeated_approvals(mode)
     check_logout()
     check_copilot_account()

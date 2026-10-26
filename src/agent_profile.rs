@@ -20,7 +20,7 @@ pub fn root(agent: &AiAgent) -> PathBuf {
     base.join("nexuterm/agents")
         .join(format!("{:x}", Sha256::digest(agent.id.as_bytes())))
 }
-fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
