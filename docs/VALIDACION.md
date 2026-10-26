@@ -1,5 +1,11 @@
 # Validación de NexuTerm
 
+Este documento conserva resultados históricos. Cada apartado corresponde al estado
+y entorno de su ejecución; no acredita que las mismas pruebas se hayan repetido en
+el checkout actual. Las implementaciones sustituidas se mantienen como historial.
+Consulta el [README](../README.md) para el uso y los límites actuales y la
+[documentación técnica](analysis/README.md) para la organización del código.
+
 ## Whisper local instalado — 23 de octubre de 2026
 
 - Motor oficial whisper.cpp, etiqueta v1.9.5, commit
@@ -464,14 +470,14 @@ nuevo: GTK reutiliza la instancia registrada con el mismo identificador.
 
 Fecha: 21 de octubre de 2026.
 
-## Entorno utilizado
+## Entorno utilizado en la validación 0.1.0
 
 - Ubuntu 26.04.1 LTS en WSL, x86_64.
 - Rust/Cargo 1.99.1, instalados a nivel de usuario con rustup y sin modificar el PATH.
 - GTK 4.22.4; VTE GTK4 0.84.0.
 - Disponibles OpenSSH, `xfreerdp3`, TigerVNC `vncviewer`, GVfs, Xvfb y D-Bus.
 
-## Resultados
+## Resultados de la validación 0.1.0
 
 | Comprobación | Resultado real |
 |---|---|
@@ -483,7 +489,6 @@ Fecha: 21 de octubre de 2026.
 | PTY VTE | Shell de prueba imprime marcador y su proceso termina con código 0 |
 | Lectura de configuración | Carga perfiles ficticios SSH, RDP y VNC sin modificarlos |
 | Captura de ventana GTK | Se generó y revisó visualmente; se ajustaron anchos y nombres |
-| Instalación MobaXterm | SHA-256 de los seis originales coincide con el inventario inicial |
 
 Las pruebas del modelo cubren host inválido/opciones, IPv6, argumentos sin shell,
 ausencia de contraseñas en el esquema y en argumentos, formato de puertos RDP/VNC,
@@ -517,7 +522,7 @@ En la sesión aislada de WSL aparecieron avisos de portales, PipeWire/RealtimeKi
 montaje FUSE de GVfs. No impidieron el arranque ni la prueba PTY. SFTP real permanece
 pendiente; la app usa GIO directamente y la prueba de arranque no verifica su montaje.
 
-## Pendiente de aceptación
+## Pendiente de aceptación registrado en 0.1.0
 
 - Login SSH por contraseña/clave/agente y salto contra servidores de laboratorio.
 - Navegación, autenticación, transferencias, cancelación y edición SFTP reales.
@@ -526,6 +531,6 @@ pendiente; la app usa GIO directamente y la prueba de arranque no verifica su mo
 - Pruebas en Ubuntu 24.04, Debian 13 y otras distribuciones; validación Wayland nativa.
 - Empaquetado redistribuible para runtimes antiguos; Flatpak/AppImage aún no preparados.
 
-No se ha inicializado Git, hecho commit, publicado ni desplegado el proyecto.
-El repositorio HMI no se modificó. Los artefactos de compilación quedan en `target/`,
-excluido por `.gitignore`.
+Los artefactos de compilación quedan en `target/`, excluido por `.gitignore`.
+El estado de Git y los resultados de apartados posteriores deben consultarse por
+separado; esta sección describe únicamente la validación inicial.

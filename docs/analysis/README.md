@@ -1,18 +1,15 @@
-# Expediente de análisis previo
+# Documentación técnica de NexuTerm
 
-Estos tres documentos proceden del análisis REA de la instalación local de MobaXterm:
+Revisión documental: 26 de octubre de 2026. Describe el proyecto Rust/Linux
+actual a partir de sus fuentes y configuración.
 
-- [Informe principal](INFORME_MOBAXTERM_RUST_LINUX.md)
-- [Catálogo por ejecutable](CATALOGO_EJECUTABLES.md)
-- [Propuesta técnica Rust/Linux](PROPUESTA_RUST_LINUX.md)
+- [Arquitectura](ARQUITECTURA.md): plataforma, módulos, conexiones y persistencia.
+- [Herramientas y dependencias](CATALOGO_EJECUTABLES.md): requisitos de compilación,
+  ejecución, empaquetado y laboratorio.
+- [Alcance y trabajo pendiente](PROPUESTA_RUST_LINUX.md): límites conocidos y
+  criterios de aceptación de futuras ampliaciones.
 
-El expediente completo con inventarios JSON, hashes y exportaciones de evidencia está en:
-
-```text
-/mnt/c/Users/marc.julia/Documents/Codex/2026-10-21-mobaxterm-rea/
-```
-
-Las referencias a archivos de evidencia de esos informes se resuelven en esa carpeta.
-Los binarios derivados utilizados para el análisis permanecen temporales y no se incluyen
-en este proyecto. Las capacidades propuestas en el análisis no deben confundirse con
-las ya implementadas: el estado actual está en el README principal y VALIDACION.md.
+El [README principal](../../README.md) contiene los pasos de uso e instalación.
+El [historial de validación](../VALIDACION.md) y las
+[pruebas de conexión de IA](../PRUEBAS_CONEXION_IA.md) conservan resultados
+fechados. Esta revisión documental no vuelve a ejecutar esas pruebas.

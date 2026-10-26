@@ -1,7 +1,7 @@
 # NexuTerm
 
 Aplicación Rust para Linux con terminal por pestañas y conexiones SSH, SFTP, Telnet, FTP, RDP y VNC.
-Primera versión funcional en desarrollo: no es una réplica completa de MobaXterm.
+Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobaciones de validación antes de distribuirla.
 
 ## Primera versión
 
@@ -244,7 +244,7 @@ La instalación registra el lanzador en el menú; no copia accesos directos al e
 
 Si RDP presenta un certificado autofirmado, se muestra el servidor, el titular, la validez y la huella SHA-256 antes de autenticar. Comprueba la huella por otro medio con el administrador y elige **Confiar solo esta sesión** si coincide. **Cancelar** es la opción predeterminada. La confianza no se guarda: cada conexión sin una CA válida requiere confirmación. No se envía la contraseña hasta aceptar el certificado mostrado en esa misma conexión TLS.
 
-El navegador utiliza **SFTP sobre SSH**, como el panel SSH de MobaXterm. Terminal y archivos comparten un socket de control propio y privado. Si no hay conexión autenticada, el navegador espera o permite reintentar; no inicia una conexión independiente ni modifica `~/.ssh/config`.
+El navegador utiliza **SFTP sobre SSH**. Terminal y archivos comparten un socket de control propio y privado. Si no hay conexión autenticada, el navegador espera o permite reintentar; no inicia una conexión independiente ni modifica `~/.ssh/config`.
 
 Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones guardadas en el panel lateral. Al seleccionar otra clase de pestaña, vuelve el explorador local. F9 muestra u oculta el lateral. Cada pestaña SSH conserva su propio navegador y ruta. La navegación manual no sigue automáticamente los cambios de carpeta del shell.
 
@@ -277,9 +277,9 @@ la subida. Cerrar y descartar el documento elimina su copia temporal.
 - La ampliación profesional sigue incompleta: ejecución simultánea, gestor de túneles, panel de métricas, todavía no están conectados a la interfaz. Los módulos de backend en desarrollo no equivalen a funciones aceptadas.
 - RDP y VNC se ajustan al área de la pestaña sin cambiar la resolución del servidor. No hay aún sincronización de portapapeles, audio ni configuración de certificados VNC personalizados. La compatibilidad con todos los servidores reales no está comprobada.
 - La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los protocolos de escritorio remoto.
-- No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares, importación de perfiles MobaXterm ni todas sus herramientas.
+- No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares ni importación de perfiles de otras aplicaciones.
 - El explorador transfiere un archivo cada vez, no árboles de carpetas. No sigue enlaces simbólicos automáticamente. No sobrescribe archivos existentes y un error/cancelación puede dejar un destino parcial. Cancelar detiene nuevas solicitudes y espera la operación ya enviada; no revierte los bytes escritos. SFTP usa bloques de 64 KiB y los listados muestran hasta 200 entradas por página. El modo FTP Windows CE admite listados de hasta 8 MiB; comprueba que el destino remoto no exista antes de subir, pero FTP no garantiza exclusión frente a escrituras simultáneas de otros clientes.
-- El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. No guarda cuando el backend no ofrece etag. El resaltado se procesa en segundo plano y está acotado al primer MiB y 65.536 segmentos de estilo; el resto sigue siendo editable como texto. Es resaltado sintáctico, sin análisis semántico ni servidor de lenguaje.
+- El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. En la edición local no guarda cuando el backend no ofrece etag; el guardado remoto SSH/SFTP utiliza la comprobación de contenido descrita arriba. El resaltado se procesa en segundo plano y está acotado al primer MiB y 65.536 segmentos de estilo; el resto sigue siendo editable como texto. Es resaltado sintáctico, sin análisis semántico ni servidor de lenguaje.
 - Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; la compatibilidad con listados Windows CE utiliza curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.
 - Cerrar una terminal envía SIGHUP al grupo del proceso PTY y destruye el terminal; procesos deliberadamente desacoplados no quedan bajo supervisión de la app.
 - El binario compilado en una distribución reciente no garantiza compatibilidad con glibc más antigua. Construir en la base más antigua soportada antes de distribuir.
@@ -321,15 +321,17 @@ cargo test --locked --no-default-features
 Para una prueba breve de arranque con configuración aislada, consulta `docs/VALIDACION.md`.
 Las pruebas de escritorio remoto necesitan servidores de laboratorio; no se usan equipos de producción.
 
-## Análisis previo y fuentes
+## Documentación técnica
 
-El inventario REA se encuentra en `docs/analysis/`. Incluye un informe, catálogo por ejecutable y propuesta de fases.
-Especifica qué se observó estáticamente y qué sigue sin validación dinámica.
-El código de NexuTerm se ha escrito como implementación propia sobre APIs públicas, sin copiar el pseudocódigo recuperado.
+- [Arquitectura y dependencias](docs/analysis/README.md): organización del código, herramientas externas y alcance pendiente.
+- [Historial de validación](docs/VALIDACION.md): resultados registrados por versión y comandos reproducibles; los resultados antiguos no certifican el checkout actual.
+- [Pruebas de conexión de IA](docs/PRUEBAS_CONEXION_IA.md): observaciones fechadas, sujetas a la disponibilidad y autenticación de cada proveedor.
+
+NexuTerm utiliza las APIs públicas y bibliotecas indicadas en `Cargo.toml`.
 
 - [GTK Rust](https://gtk-rs.org/gtk4-rs/stable/latest/docs/gtk4/)
 - [VTE Rust](https://docs.rs/vte4/0.10.0/vte4/)
 - [GIO](https://docs.gtk.org/gio/)
 - [OpenSSH](https://www.openssh.com/manual.html)
-- [FreeRDP](https://www.freerdp.com/)
-- [TigerVNC](https://tigervnc.org/)
+- [IronRDP](https://github.com/Devolutions/IronRDP)
+- [LibVNCServer/LibVNCClient](https://github.com/LibVNC/libvncserver)
