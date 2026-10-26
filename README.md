@@ -6,7 +6,7 @@ Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobacion
 ## Primera versión
 
 - Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas compactas y reordenables.
-- Explorador local predeterminado con un tercio del área disponible y proporción conservada al redimensionar (separador ajustable), vista de detalles Nombre/Tipo/Tamaño y filas alternas grises adaptadas al tema. Los paneles se alinean arriba y abajo, con 3 px entre ellos. La navegación y apertura están integradas en su cabecera, sin pie permanente de paginación o contador. Doble clic o Intro navega por carpetas y abre archivos. Sigue los cambios de carpeta de la terminal local activa mediante VTE o `/proc`; navegar por el explorador no ejecuta comandos en el shell. Las conexiones guardadas siguen disponibles en **Administrar sesiones**.
+- Explorador local predeterminado con un tercio del área disponible y proporción conservada al redimensionar (separador ajustable), vista de detalles Nombre/Tipo/Tamaño/Permisos y filas alternas grises adaptadas al tema. Los paneles se alinean arriba y abajo, con 3 px entre ellos. La navegación y apertura están integradas en su cabecera, sin pie permanente de paginación o contador. Doble clic o Intro navega por carpetas y abre archivos. Sigue los cambios de carpeta de la terminal local activa mediante VTE o `/proc`; navegar por el explorador no ejecuta comandos en el shell. Las conexiones guardadas siguen disponibles en **Administrar sesiones**.
 - Lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
 - Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom y herramientas en la cabecera de la terminal. Reconexión, desconexión y archivos remotos están en **Conexiones**.
 - Cada división tiene una **×** para cerrar solo ese panel y su proceso. El panel restante ocupa el espacio disponible; para cerrar la última terminal usa la **×** de su pestaña.
@@ -22,6 +22,22 @@ Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobacion
 - VNC integrado en una pestaña GTK: escritorio ajustado al área disponible, teclado, ratón y rueda, contraseña temporal y desconexión al cerrar la pestaña. No necesita Remmina ni otro visor.
 - RDP integrado mediante IronRDP: escritorio en una pestaña GTK, teclado, ratón, contraseña temporal y TLS con validación de certificado y nombre del servidor. No necesita FreeRDP ni Remmina.
 - Configuración XDG versionada, escritura atómica y archivo privado; no contiene campos de contraseña.
+
+En **Preferencias → Navegador** puedes configurar las columnas Tipo, Tamaño y
+Permisos (Nombre siempre visible), si se muestran los ocultos al abrir, la
+visibilidad inicial del lateral y la aplicación para abrir archivos locales.
+Los cambios se guardan y se aplican a los paneles abiertos, locales y remotos.
+Los permisos se muestran como `rwxr-xr-x`, incluyendo setuid/setgid/sticky;
+si el servidor no los proporciona se muestra `—` en lugar de inventarlos.
+
+**Ctrl+H**, con el foco en el explorador, y el botón del ojo muestran u ocultan
+los nombres que empiezan por punto, sin cambiar el atajo de la terminal. Los
+botones **Nueva carpeta** y **Nuevo archivo** piden un nombre simple y crean en
+la carpeta actual sin sobrescribir destinos existentes. Están disponibles en
+local y SSH/SFTP, y en FTP cuando el backend del servidor lo admite; los
+servidores FTP Windows CE heredados no ofrecen creación desde este navegador.
+La barra vertical reserva su propio espacio y las columnas que no caben tienen
+desplazamiento horizontal compartido con sus cabeceras.
 
 En **Preferencias** puedes elegir abrir los archivos del explorador con la aplicación predeterminada del sistema en lugar del editor integrado, y mostrar u ocultar los números de línea (se aplica a nuevos editores). Por defecto se usa el editor integrado con numeración. Los archivos binarios o que no sean UTF-8 no se editan.
 
@@ -293,6 +309,7 @@ cargo clippy --locked --all-targets -- -D warnings
 python3 -m unittest discover -s tests -p test_release.py
 python3 lab/check_ui.py menus
 python3 lab/check_local_explorer.py
+python3 lab/check_browser_features.py
 python3 lab/check_remote_editor.py
 python3 lab/check_vnc.py
 python3 lab/check_vnc.py --password
