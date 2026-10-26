@@ -354,7 +354,7 @@ def check_logout():
         assert "NEXUTERM_SMOKE_LOGOUT_OK" in logs, logs
         requests = [json.loads(line) for line in (directory / "protocol.jsonl").read_text().splitlines()]
         assert any(r.get("method") == "account/logout" for r in requests)
-        print("PASS graphical logout: link and restored login")
+        print("PASS graphical logout: link, restored login and no ready notice")
 
 
 def check_copilot_account():

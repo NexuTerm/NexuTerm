@@ -21,6 +21,7 @@ pub(super) struct Chat {
 #[derive(Clone)]
 struct UsageView {
     account: gtk::Label,
+    account_row: gtk::Box,
     quota: gtk::Label,
     context: gtk::Label,
     tokens: gtk::Label,
@@ -28,12 +29,16 @@ struct UsageView {
 }
 impl UsageView {
     fn new(parent: &gtk::Box) -> Self {
-        let view = Self { account: gtk::Label::new(Some("Usuario: no disponible")), quota: gtk::Label::new(Some("Cuota restante: no disponible")), context: gtk::Label::new(None), tokens: gtk::Label::new(None), snapshot: Rc::new(RefCell::new(Value::Null)) };
+        let view = Self { account_row: gtk::Box::new(gtk::Orientation::Horizontal, 4), account: gtk::Label::new(Some("Usuario: no disponible")), quota: gtk::Label::new(Some("Cuota restante: no disponible")), context: gtk::Label::new(None), tokens: gtk::Label::new(None), snapshot: Rc::new(RefCell::new(Value::Null)) };
         view.account.set_widget_name("ai-account"); view.quota.set_widget_name("ai-quota");
+        view.account.set_hexpand(true);
+        view.account.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        view.account_row.append(&view.account);
+        parent.append(&view.account_row);
         for label in [&view.account, &view.quota, &view.context, &view.tokens] {
-            label.set_xalign(0.0); label.set_wrap(true); label.add_css_class("caption"); label.add_css_class("dim-label"); parent.append(label);
+            label.set_xalign(0.0); label.set_wrap(true); label.add_css_class("caption"); label.add_css_class("dim-label"); if label != &view.account { parent.append(label); }
         }
-        view.context.set_visible(false); view.tokens.set_visible(false); view
+        view.account.set_wrap(false); view.context.set_visible(false); view.tokens.set_visible(false); view
     }
     fn reset(&self) {
         self.account.set_text("Usuario: no disponible"); self.context.set_visible(false); self.tokens.set_visible(false);
@@ -385,10 +390,11 @@ fn request_dialog(
 }
 
 pub(super) fn build(state: &Rc<State>, process: &Rc<ai_panel::Process>) -> Chat {
-    let login_button = gtk::Button::with_label("Conectar / iniciar sesión");
+    let login_button = gtk::Button::with_label("Iniciar sesión");
     login_button.add_css_class("flat");
+    login_button.add_css_class("ai-auth-control");
     login_button.set_halign(gtk::Align::End);
-    let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let widget = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let history = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let heading = gtk::Label::new(Some("Chats recientes"));
     heading.set_xalign(0.0);
@@ -588,6 +594,11 @@ Puede solicitar permiso para leerlas.",
     model.set_tooltip_text(Some("Modelo del agente seleccionado"));
     let models: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
     toolbar.append(&model);
+    let mode = gtk::DropDown::from_strings(&["Solo lectura", "Pedir permiso"]);
+    mode.set_widget_name("ai-permissions");
+    mode.add_css_class("flat");
+    mode.set_tooltip_text(Some("Permisos: solo lectura o solicitar aprobación para usar herramientas"));
+    toolbar.append(&mode);
     let effort = gtk::DropDown::from_strings(&["Auto"]);
     effort.add_css_class("flat");
     effort.set_tooltip_text(Some("Nivel de razonamiento"));
@@ -622,16 +633,9 @@ Puede solicitar permiso para leerlas.",
     toolbar.append(&send);
     editor.append(&toolbar);
     widget.append(&editor);
-    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    footer.append(&gtk::Image::from_icon_name("computer-symbolic"));
-    let mode =
-        gtk::DropDown::from_strings(&["Local · solo lectura", "Local · solicitar aprobación"]);
-    mode.add_css_class("flat");
-    mode.set_tooltip_text(Some("Permisos para la nueva conversación"));
-    footer.append(&mode);
-    widget.append(&footer);
     let usage = UsageView::new(&widget);
     let browser = gtk::LinkButton::with_label("about:blank", "Abrir inicio de sesión de ChatGPT");
+    browser.add_css_class("ai-auth-control");
     browser.set_visible(false);
     widget.append(&browser);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -642,6 +646,7 @@ Puede solicitar permiso para leerlas.",
     info.set_xalign(0.0);
     info.add_css_class("dim-label");
     info.add_css_class("caption");
+    info.connect_label_notify(|label| label.set_visible(!label.text().is_empty()));
     row.append(&spinner);
     row.append(&info);
     widget.append(&row);
@@ -649,8 +654,9 @@ Puede solicitar permiso para leerlas.",
     let logout = gtk::LinkButton::with_label("about:blank", "Cerrar sesión");
     logout.set_widget_name("ai-logout");
     logout.set_halign(gtk::Align::End);
+    logout.add_css_class("ai-auth-control");
     logout.set_visible(false);
-    widget.append(&logout);
+    usage.account_row.append(&logout);
     let logout_client = current.clone();
     logout.connect_activate_link(move |_| {
         if let Some((_, client)) = logout_client.borrow().as_ref() { client.logout(); }
@@ -995,7 +1001,7 @@ Puede solicitar permiso para leerlas.",
                             }
                             ready = authenticated;
                             info.set_text(if ready {
-                                "Agente listo. Escribe tu mensaje."
+                                ""
                             } else {
                                 "Conecta o autentica este agente para conversar."
                             });
@@ -1004,6 +1010,7 @@ Puede solicitar permiso para leerlas.",
                             #[cfg(debug_assertions)]
                             if codex_profile && std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("logout") {
                                 if authenticated && !logout_test_started {
+                                    assert!(info.text().is_empty() && !info.is_visible());
                                     let link = logout.upgrade().expect("Logout link");
                                     assert!(link.is_visible());
                                     logout_test_started = true;
@@ -1179,7 +1186,7 @@ Puede solicitar permiso para leerlas.",
 
                             close_dialogs(&dialogs);
                             info.set_text(match status.as_str() {
-                                "completed" => "Respuesta completada.",
+                                "completed" => "",
                                 "interrupted" => "Respuesta detenida.",
                                 _ => "El turno del agente falló. Puedes volver a intentarlo.",
                             });
@@ -1218,6 +1225,7 @@ Puede solicitar permiso para leerlas.",
                 }
                 if let Some(link) = logout.upgrade() { link.set_sensitive(!client.busy()); }
                 send.set_sensitive(ready && !client.busy());
+                spinner.set_visible(client.busy());
                 if client.busy() {
                     spinner.start();
                 } else {
