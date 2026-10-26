@@ -80,9 +80,15 @@ OpenCode permite actualizar su catálogo gratuito sin sustituir automáticamente
 modelo fallido por otro de pago. Consulta sus condiciones y disponibilidad en
 [OpenCode](https://opencode.ai/docs/).
 
-**Nueva conversación** inicia el perfil seleccionado; cambiar de agente abre su
-chat en el mismo panel. **Ctrl+Intro** envía y **Detener** cancela. Ocultar la
-paleta conserva la conversación; cambiar de agente inicia otra conversación.
+El botón **+ Nuevo chat** permite elegir otro agente y uno de sus modelos configurados.
+Abre una pestaña independiente y conserva los mensajes, borrador y conexión de las
+conversaciones anteriores. Si el catálogo aún no se ha cargado, se puede elegir el
+modelo predeterminado y cambiarlo después en el editor. Se pueden mantener hasta ocho
+chats abiertos; cerrar una pestaña adicional detiene únicamente su conexión.
+
+**Ctrl+Intro** envía el mensaje y **Detener** cancela la respuesta del chat activo.
+Ocultar la paleta conserva las conversaciones abiertas. El selector de agente superior
+cambia el agente del chat activo; para conservarlo y trabajar con otro, utiliza **+**.
 
 **Iniciar sesión** utiliza el acceso web del agente cuando está disponible:
 Codex mediante su servidor oficial, Copilot mediante `login --web-flow` y Claude
