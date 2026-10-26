@@ -17,6 +17,10 @@ use tokio::{
 const MAX_FRAME: usize = 1024 * 1024;
 #[derive(Debug)]
 pub enum Event {
+    Account(Option<String>),
+    RateLimits(Value),
+    ContextUsage { used: u64, size: u64 },
+    TokenUsage { input: u64, output: u64 },
     Ready(bool),
     Capabilities {
         tools: bool,
@@ -292,6 +296,7 @@ async fn run(
     let mut selected_effort = String::new();
     let mut stopping = false;
     let mut last_activity = tokio::time::Instant::now();
+    let mut last_usage_read = tokio::time::Instant::now();
     let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -352,6 +357,13 @@ async fn run(
                         continue;
                     }
                     match method {
+                        "account/rateLimits/updated" => { events.send(Event::RateLimits(params.clone())).await.map_err(|_|())?; }
+                        "account/updated" => { request(&mut input,&mut pending,&mut seq,"account/read",json!({"refreshToken":false})).await?; }
+                        "thread/tokenUsage/updated" => {
+                            if let (Some(used),Some(size))=(params["tokenUsage"]["last"]["totalTokens"].as_u64(),params["tokenUsage"]["modelContextWindow"].as_u64()) {
+                                events.send(Event::ContextUsage{used,size}).await.map_err(|_|())?;
+                            }
+                        }
                         "item/agentMessage/delta" => {
                             events.send(Event::Delta {item:params["itemId"].as_str().unwrap_or("message").into(),text:params["delta"].as_str().unwrap_or("").into()}).await.map_err(|_| ())?;
                         }
@@ -364,6 +376,7 @@ async fn run(
                             turn.clear(); busy.store(false,Ordering::Relaxed);
                             let status=params["turn"]["status"].as_str().unwrap_or("failed");
                             events.send(Event::Finished(status.into())).await.map_err(|_| ())?;
+                            if chatgpt && !pending.values().any(|m|m=="account/rateLimits/read") { request(&mut input,&mut pending,&mut seq,"account/rateLimits/read",json!({})).await?; }
                         }
                         "account/login/completed" => {
                             login.clear(); want_login=false;
@@ -383,6 +396,7 @@ async fn run(
                 let Some(id)=frame["id"].as_u64() else { continue; };
                 let Some(method)=pending.remove(&id) else { continue; };
                 if frame.get("error").is_some() {
+                    if method == "account/rateLimits/read" { events.send(Event::RateLimits(Value::Null)).await.map_err(|_|())?; continue; }
                     if matches!(method.as_str(),"model/list"|"thread/list") { events.send(Event::Status(format!("No se pudo consultar {}.",method))).await.map_err(|_|())?; continue; }
                     busy.store(false,Ordering::Relaxed); queued=None;
                     events.send(Event::Error(format!("Codex rechazó {method} (código {}). Revisa modelo, cuenta y configuración.",frame["error"]["code"])) ).await.map_err(|_| ())?;
@@ -397,11 +411,14 @@ async fn run(
                         request(&mut input,&mut pending,&mut seq,"account/read",json!({"refreshToken":false})).await?;
                         if let Some(key)=api_key.take(){request(&mut input,&mut pending,&mut seq,"account/login/start",json!({"type":"apiKey","apiKey":key.as_str()})).await?;}
                     }
+                    "account/rateLimits/read" => { last_usage_read=tokio::time::Instant::now(); events.send(Event::RateLimits(result.clone())).await.map_err(|_|())?; }
                     "account/read" => {
                         account_known=true;
                         chatgpt=result["account"]["type"]=="chatgpt";
                         authenticated=!result["account"].is_null() || result["requiresOpenaiAuth"]==false;
                         busy.store(false,Ordering::Relaxed);
+                        events.send(Event::Account(result["account"]["email"].as_str().map(String::from))).await.map_err(|_|())?;
+                        if chatgpt { request(&mut input,&mut pending,&mut seq,"account/rateLimits/read",json!({})).await?; }
                         events.send(Event::Ready(authenticated)).await.map_err(|_| ())?;
                         request(&mut input, &mut pending, &mut seq, "thread/list", json!({"limit":12,"cwd":directory,"sortKey":"updated_at"})).await?;
                         request(&mut input, &mut pending, &mut seq, "model/list", json!({})).await?;
@@ -445,7 +462,11 @@ async fn run(
                 }
             }
             _ = watchdog.tick() => {
-                let limit=if !initialized || !pending.is_empty() { 30 } else if busy.load(Ordering::Relaxed) { 600 } else { u64::MAX };
+                if chatgpt && last_usage_read.elapsed().as_secs() >= 60 && !pending.values().any(|m|m=="account/rateLimits/read") {
+                    last_usage_read=tokio::time::Instant::now();
+                    request(&mut input,&mut pending,&mut seq,"account/rateLimits/read",json!({})).await?;
+                }
+                let limit=if !initialized || pending.values().any(|m|m!="account/rateLimits/read") { 30 } else if busy.load(Ordering::Relaxed) { 600 } else { u64::MAX };
                 if last_activity.elapsed().as_secs() > limit { return Err(()); }
             }
         }

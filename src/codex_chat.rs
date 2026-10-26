@@ -18,6 +18,41 @@ pub(super) struct Chat {
     pub models: Rc<RefCell<Vec<Value>>>,
     pub login: gtk::Button,
 }
+#[derive(Clone)]
+struct UsageView {
+    account: gtk::Label,
+    quota: gtk::Label,
+    context: gtk::Label,
+    tokens: gtk::Label,
+    snapshot: Rc<RefCell<Value>>,
+}
+impl UsageView {
+    fn new(parent: &gtk::Box) -> Self {
+        let view = Self { account: gtk::Label::new(Some("Usuario: no disponible")), quota: gtk::Label::new(Some("Cuota restante: no disponible")), context: gtk::Label::new(None), tokens: gtk::Label::new(None), snapshot: Rc::new(RefCell::new(Value::Null)) };
+        view.account.set_widget_name("ai-account"); view.quota.set_widget_name("ai-quota");
+        for label in [&view.account, &view.quota, &view.context, &view.tokens] {
+            label.set_xalign(0.0); label.set_wrap(true); label.add_css_class("caption"); label.add_css_class("dim-label"); parent.append(label);
+        }
+        view.context.set_visible(false); view.tokens.set_visible(false); view
+    }
+    fn reset(&self) {
+        self.account.set_text("Usuario: no disponible"); self.context.set_visible(false); self.tokens.set_visible(false);
+        *self.snapshot.borrow_mut() = Value::Null; self.render("");
+    }
+    fn render(&self, model: &str) {
+        let windows = nexuterm::ai_usage::windows(&self.snapshot.borrow(), model);
+        if windows.is_empty() {
+            self.quota.set_text("Cuota restante: no disponible");
+            self.quota.set_tooltip_text(Some("El proveedor no ha comunicado su cuota restante. No se estima a partir de los tokens usados."));
+        } else {
+            self.quota.set_text(&windows.iter().map(|w| format!("{}: {:.0}%", w.label, w.remaining)).collect::<Vec<_>>().join(" · "));
+            let mut detail = String::from("Cuota restante de la cuenta comunicada por el proveedor; puede estar compartida entre modelos.");
+            for w in windows { if let Some(date) = w.resets_at.and_then(|time| glib::DateTime::from_unix_local(time).ok()).and_then(|date| date.format("%d/%m %H:%M").ok()) { detail.push_str(&format!("\n{} se restablece: {date}", w.label)); } }
+            self.quota.set_tooltip_text(Some(&detail));
+        }
+    }
+}
+
 fn message(list: &gtk::Box, title: &str, content: &str, tool: bool) -> gtk::Label {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("card");
@@ -595,6 +630,7 @@ Puede solicitar permiso para leerlas.",
     mode.set_tooltip_text(Some("Permisos para la nueva conversación"));
     footer.append(&mode);
     widget.append(&footer);
+    let usage = UsageView::new(&widget);
     let browser = gtk::LinkButton::with_label("about:blank", "Abrir inicio de sesión de ChatGPT");
     browser.set_visible(false);
     widget.append(&browser);
@@ -619,7 +655,13 @@ Puede solicitar permiso para leerlas.",
             w.set_visible(items.n_items() == 0);
         }
     });
+    let usage_models = models.clone(); let usage_choice = usage.clone();
+    model.connect_selected_notify(move |choice| {
+        let models = usage_models.borrow();
+        usage_choice.render(models.get(choice.selected() as usize).and_then(|v|v["model"].as_str()).unwrap_or(""));
+    });
     let open: Rc<dyn Fn(AiAgent, bool)> = {
+        let usage = usage.clone();
         let welcome = welcome.downgrade();
         let recent = recent.downgrade();
         let model = model.downgrade();
@@ -675,6 +717,7 @@ Puede solicitar permiso para leerlas.",
             else {
                 return;
             };
+            usage.reset();
             close_dialogs(&dialogs);
             if let Some((_, old)) = current.borrow_mut().take() {
                 old.close();
@@ -738,6 +781,7 @@ Puede solicitar permiso para leerlas.",
             let preferred_model = agent.model.clone();
             let login_button = login_button.clone();
             let reasoning_selector = effort.clone();
+            let usage = usage.clone();
             let mut ready = false;
             let recent = recent.clone();
             let models = models.clone();
@@ -766,6 +810,26 @@ Puede solicitar permiso para leerlas.",
                         Err(_) => return glib::ControlFlow::Break,
                     };
                     match event {
+                        Event::Account(name) => {
+                            usage.reset();
+                            usage.account.set_text(&name.map(|name| format!("Usuario: {name}")).unwrap_or_else(|| "Usuario: no disponible".into()));
+                            *usage.snapshot.borrow_mut() = Value::Null; usage.render("");
+                        }
+                        Event::RateLimits(value) => {
+                            *usage.snapshot.borrow_mut() = value;
+                            let selected = model.upgrade().map(|m|m.selected()).unwrap_or(0);
+                            usage.render(models.borrow().get(selected as usize).and_then(|m|m["model"].as_str()).unwrap_or(""));
+                        }
+                        Event::ContextUsage {used,size} => {
+                            if let Some(remaining) = nexuterm::ai_usage::context_remaining(used,size) {
+                                usage.context.set_text(&format!("Contexto restante: {remaining:.0}%"));
+                                usage.context.set_tooltip_text(Some(&format!("{used} de {size} tokens de contexto. No es la cuota de la cuenta.")));
+                                usage.context.set_visible(true);
+                            } else { usage.context.set_visible(false); }
+                        }
+                        Event::TokenUsage {input,output} => {
+                            usage.tokens.set_text(&format!("Última petición: {input} tokens de entrada · {output} de salida")); usage.tokens.set_visible(true);
+                        }
                         Event::Capabilities {
                             tools,
                             history: has_history,

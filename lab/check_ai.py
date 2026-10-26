@@ -135,6 +135,17 @@ def check_shutdown():
         thread.join(timeout=2)
 
 
+def check_usage():
+    with tempfile.TemporaryDirectory(prefix="nexuterm-usage-") as directory:
+        directory=Path(directory)
+        codex=directory/"codex"
+        codex.write_text("#!"+shutil.which("python3")+"\n"+(ROOT/"lab/codex_fixture.py").read_text());codex.chmod(0o700)
+        profile=dict(id="usage",name="Codex",kind="Codex",program=str(codex),directory=str(directory))
+        _,logs=run("usage",profile,directory)
+        assert "NEXUTERM_SMOKE_USAGE_OK" in logs,logs
+        print("PASS usage: account name, 5-hour remaining 75%, weekly remaining 40% from provider")
+
+
 def check_new_chat():
     with tempfile.TemporaryDirectory(prefix="nexuterm-new-chat-") as directory:
         directory=Path(directory)
@@ -334,6 +345,7 @@ def check_opencode():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_usage()
     check_new_chat()
     check_local()
     check_local(switch=True)

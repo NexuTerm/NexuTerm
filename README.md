@@ -86,6 +86,17 @@ conversaciones anteriores. Si el catálogo aún no se ha cargado, se puede elegi
 modelo predeterminado y cambiarlo después en el editor. Se pueden mantener hasta ocho
 chats abiertos; cerrar una pestaña adicional detiene únicamente su conexión.
 
+Cada chat muestra el usuario y la cuota restante cuando el proveedor los comunica.
+Codex presenta las ventanas de **5 horas** y **semanal** en porcentaje, si están
+incluidas en su respuesta, y la hora de renovación en la ayuda del indicador. Las
+cuotas se consultan al conectar, al terminar un turno y cada minuto; también se
+atienden las notificaciones del servidor. Pueden estar compartidas entre modelos.
+Los agentes ACP y Ollama muestran **Contexto restante** si informan de sus tokens y
+capacidad de contexto; es una métrica distinta de la cuota de la cuenta. Las API
+muestran los tokens de la última petición. Los datos no proporcionados figuran como
+**No disponible**. Los nombres de cuenta se muestran en la interfaz, sin guardarlos
+en el perfil ni escribirlos en los registros.
+
 **Ctrl+Intro** envía el mensaje y **Detener** cancela la respuesta del chat activo.
 Ocultar la paleta conserva las conversaciones abiertas. El selector de agente superior
 cambia el agente del chat activo; para conservarlo y trabajar con otro, utiliza **+**.

@@ -55,7 +55,14 @@ async fn event(rx: &mut tokio::sync::mpsc::Receiver<Event>) -> Event {
             .await
             .unwrap()
             .expect("server closed");
-        if !matches!(event, Event::Capabilities { .. }) {
+        if !matches!(
+            event,
+            Event::Capabilities { .. }
+                | Event::Account(_)
+                | Event::RateLimits(_)
+                | Event::ContextUsage { .. }
+                | Event::TokenUsage { .. }
+        ) {
             return event;
         }
     }
@@ -229,4 +236,104 @@ fn history_models_permissions_and_reasoning_are_real_protocol_requests() {
         assert_eq!(turn["params"]["model"], "fixture-model");
         assert_eq!(turn["params"]["effort"], "high");
     });
+}
+
+#[tokio::test]
+async fn account_and_real_quota_windows_are_read_and_updated() {
+    let fixture = Fixture::new(false);
+    let (client, mut rx) = fixture.start();
+    let mut account = false;
+    let mut quota = false;
+    while !account || !quota {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            Event::Account(user) => {
+                assert_eq!(user.as_deref(), Some("fixture@example.invalid"));
+                account = true;
+            }
+            Event::RateLimits(value) => {
+                let windows = nexuterm::ai_usage::windows(&value, "fixture-model");
+                assert_eq!(windows[0].remaining, 75.0);
+                assert_eq!(windows[1].remaining, 40.0);
+                quota = true;
+            }
+            Event::Error(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+    // Readiness and usage responses are independent asynchronous events.
+    while client.busy() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(client.send("usage".into()));
+    let mut context = false;
+    let mut updated = false;
+    while !context || !updated {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            Event::ContextUsage { used, size } => {
+                assert_eq!((used, size), (1024, 4096));
+                context = true;
+            }
+            Event::RateLimits(value) => {
+                let windows = nexuterm::ai_usage::windows(&value, "fixture-model");
+                assert_eq!(windows[0].remaining, 74.0);
+                updated = true;
+            }
+            Event::Error(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+    client.close();
+    assert!(
+        fixture
+            .requests()
+            .iter()
+            .any(|r| r["method"] == "account/rateLimits/read")
+    );
+}
+
+#[tokio::test]
+async fn unavailable_quota_does_not_break_the_conversation() {
+    let fixture = Fixture::new(false);
+    std::fs::write(fixture.0.join("no-rate-limits"), "").unwrap();
+    let (client, mut rx) = fixture.start();
+    let mut ready = false;
+    let mut unknown = false;
+    while !ready || !unknown {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            Event::Ready(value) => {
+                assert!(value);
+                ready = true;
+            }
+            Event::RateLimits(value) => {
+                assert!(value.is_null());
+                unknown = true;
+            }
+            Event::Error(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+    assert!(client.send("hello".into()));
+    loop {
+        match event(&mut rx).await {
+            Event::Finished(status) => {
+                assert_eq!(status, "completed");
+                break;
+            }
+            Event::Error(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+    client.close();
 }

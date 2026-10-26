@@ -433,6 +433,21 @@ pub async fn local_model_tools(endpoint: String, model: String) -> Result<Option
         .map(|values| values.iter().any(|v| v == "tools")))
 }
 
+/// Actual allocated context from local Ollama; model catalogue maxima are not substituted.
+#[cfg(feature = "gui")]
+pub async fn local_context_limit(endpoint: String, model: String) -> Result<Option<u64>, String> {
+    let mut url = crate::ai_config::validate_url(&endpoint)?;
+    let local = match url.host() {
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(), _ => false,
+    };
+    if !local || url.port_or_known_default() != Some(11434) { return Ok(None); }
+    url.set_path("/api/ps");
+    let value = http_json(url.to_string(), Zeroizing::new(String::new()), None, 5).await?;
+    Ok(value["models"].as_array().into_iter().flatten().find(|m| m["name"].as_str() == Some(&model) || m["model"].as_str() == Some(&model)).and_then(|m|m["context_length"].as_u64()).filter(|&size|size>0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

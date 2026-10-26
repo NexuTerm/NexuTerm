@@ -194,6 +194,10 @@ async fn api_turn(
     let mut answer = String::new();
     for _ in 0..12 {
         let response = ai::exchange(agent, key, &history).await?;
+        let usage = &response["usage"];
+        if let (Some(input),Some(output)) = (usage["input_tokens"].as_u64().or_else(||usage["prompt_tokens"].as_u64()), usage["output_tokens"].as_u64().or_else(||usage["completion_tokens"].as_u64())) {
+            emit(events, Event::TokenUsage{input,output}).await.map_err(|_| "Chat cerrado")?;
+        }
         let responses = agent.kind == crate::ai_config::AiKind::Responses;
         let calls: Vec<Value> = if responses {
             response["output"]
@@ -210,6 +214,10 @@ async fn api_turn(
                 .unwrap_or_default()
         };
         if calls.is_empty() {
+            if let (Some(input),Some(output)) = (usage["input_tokens"].as_u64().or_else(||usage["prompt_tokens"].as_u64()), usage["output_tokens"].as_u64().or_else(||usage["completion_tokens"].as_u64()))
+                && let Ok(Some(size)) = ai::local_context_limit(agent.endpoint.clone(), response["model"].as_str().unwrap_or(&agent.model).to_owned()).await {
+                    emit(events,Event::ContextUsage{used:input.saturating_add(output),size}).await.map_err(|_| "Chat cerrado")?;
+            }
             let text = ai::parse_response(agent.kind, &response)?;
             answer.push_str(&text);
             history.push(json!({"role":"assistant","content":answer}));
@@ -395,6 +403,7 @@ async fn acp(
             else{emit(&events,Event::Request{id,method:"item/commandExecution/requestApproval".into(),params:json!({"command":operation,"cwd":directory,"reason":"Solicitud de herramienta del agente ACP; revisa su entrada completa."})}).await?;}
            }else{write(&mut input,json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Unsupported client capability"}})).await?;}continue;}
            if method=="session/update"{let update=&params["update"];match update["sessionUpdate"].as_str().unwrap_or(""){
+            "usage_update"=>{if let (Some(used),Some(size))=(update["used"].as_u64(),update["size"].as_u64()){emit(&events,Event::ContextUsage{used,size}).await?;}},
             "agent_message_chunk"=>{if let Some(text)=update["content"]["text"].as_str(){emit(&events,Event::Delta{item:format!("acp-{item}"),text:text.into()}).await?;}},
             "tool_call"|"tool_call_update"=>{emit(&events,Event::Item(json!({"type":"commandExecution","id":update["toolCallId"],"command":update["title"].as_str().unwrap_or("Herramienta"),"aggregatedOutput":update["content"].as_array().map(|items|items.iter().filter_map(|i|i["content"]["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default()}))).await?;},_=>{}
            }}continue;

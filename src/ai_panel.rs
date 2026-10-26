@@ -691,6 +691,29 @@ pub(super) fn install(
         if matches!(mode.as_str(), "credentials" | "keyring") {
             super::ai_credentials::smoke(state, mode == "keyring");
         }
+        if mode == "usage" {
+            let active = active.clone();
+            let tries = Cell::new(0);
+            glib::timeout_add_local(std::time::Duration::from_millis(70), move || {
+                tries.set(tries.get() + 1);
+                assert!(tries.get() < 50, "usage did not arrive");
+                let chat = active.borrow();
+                let quota = find_named(chat.page.upcast_ref(), "ai-quota")
+                    .unwrap()
+                    .downcast::<gtk::Label>()
+                    .unwrap();
+                if quota.text().contains("5 h: 75%") && quota.text().contains("Semanal: 40%") {
+                    let account = find_named(chat.page.upcast_ref(), "ai-account")
+                        .unwrap()
+                        .downcast::<gtk::Label>()
+                        .unwrap();
+                    assert!(account.text().contains("fixture@example.invalid"));
+                    eprintln!("NEXUTERM_SMOKE_USAGE_OK");
+                    return glib::ControlFlow::Break;
+                }
+                glib::ControlFlow::Continue
+            });
+        }
         if mode == "switch" {
             let selected = selector.downgrade();
             glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {

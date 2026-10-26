@@ -29,6 +29,10 @@ for line in sys.stdin:
         account = True
         notify('account/login/completed', dict(loginId='fixture-login', success=True))
         continue
+    elif method == 'account/rateLimits/read':
+        if Path('no-rate-limits').exists():
+            emit(dict(id=ident,error=dict(code=-32601,message='not supported')));continue
+        result = dict(rateLimits=dict(primary=dict(usedPercent=25+turn,windowDurationMins=300,resetsAt=1800000000),secondary=dict(usedPercent=60+turn,windowDurationMins=10080,resetsAt=1800500000)))
     elif method == 'model/list':
         result = dict(data=[dict(id='fixture', model='fixture-model', displayName='Modelo de prueba', supportedReasoningEfforts=[dict(reasoningEffort='low', description='Ligero'),dict(reasoningEffort='high', description='Alto')])])
     elif method == 'thread/list':
@@ -54,6 +58,8 @@ for line in sys.stdin:
         for delta in ('Respuesta ', 'gráfica de Codex.'):
             notify('item/agentMessage/delta', dict(itemId=f'message-{turn}', delta=delta))
         notify('item/completed', dict(item=dict(type='agentMessage', id=f'message-{turn}', text='Respuesta gráfica de Codex.')))
+        notify('thread/tokenUsage/updated',dict(tokenUsage=dict(last=dict(totalTokens=1024),modelContextWindow=4096)))
+        notify('account/rateLimits/updated',dict(rateLimits=dict(primary=dict(usedPercent=25+turn,windowDurationMins=300),secondary=dict(usedPercent=60+turn,windowDurationMins=10080))))
         notify('turn/completed', dict(turn=dict(id=f'turn-{turn}', status='completed')))
         continue
     elif method == 'turn/interrupt':
