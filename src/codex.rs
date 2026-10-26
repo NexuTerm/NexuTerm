@@ -54,6 +54,7 @@ pub(crate) enum Command {
     Resume(String),
     Permissions(bool),
     Login,
+    Logout,
     Interrupt,
     Reply(Value),
     Shutdown,
@@ -126,6 +127,14 @@ impl Client {
             return false;
         }
         if self.commands.try_send(Command::Resume(id)).is_err() {
+            self.busy.store(false, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+    pub fn logout(&self) -> bool {
+        if self.busy.swap(true, Ordering::Relaxed) { return false; }
+        if self.commands.try_send(Command::Logout).is_err() {
             self.busy.store(false, Ordering::Relaxed);
             return false;
         }
@@ -308,6 +317,10 @@ async fn run(
                 Some(Command::Credentials(result)) => {match result{Ok(key)if !key.is_empty()=>{if initialized{request(&mut input,&mut pending,&mut seq,"account/login/start",json!({"type":"apiKey","apiKey":key.as_str()})).await?;}else{api_key=Some(key);}},Err(error)=>{events.send(Event::Error(error)).await.map_err(|_|())?;},_=>{}}},
                 Some(Command::Shutdown) | None => break,
                 Some(Command::Reply(value)) => write(&mut input, value).await?,
+                Some(Command::Logout) => {
+                    want_login=false; queued=None;
+                    request(&mut input,&mut pending,&mut seq,"account/logout",json!({})).await?;
+                }
                 Some(Command::Login) => {
                     stopping=false;
                     want_login = true;
@@ -412,6 +425,14 @@ async fn run(
                         write(&mut input,json!({"method":"initialized","params":{}})).await?;
                         request(&mut input,&mut pending,&mut seq,"account/read",json!({"refreshToken":false})).await?;
                         if let Some(key)=api_key.take(){request(&mut input,&mut pending,&mut seq,"account/login/start",json!({"type":"apiKey","apiKey":key.as_str()})).await?;}
+                    }
+                    "account/logout" => {
+                        authenticated=false; chatgpt=false; account_known=true;
+                        thread.clear(); turn.clear(); login.clear(); queued=None; want_login=false;
+                        busy.store(false,Ordering::Relaxed);
+                        events.send(Event::Account(None)).await.map_err(|_|())?;
+                        events.send(Event::RateLimits(Value::Null)).await.map_err(|_|())?;
+                        events.send(Event::Ready(false)).await.map_err(|_|())?;
                     }
                     "account/rateLimits/read" => { last_usage_read=tokio::time::Instant::now(); events.send(Event::RateLimits(result.clone())).await.map_err(|_|())?; }
                     "account/read" => {

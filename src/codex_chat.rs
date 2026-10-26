@@ -646,6 +646,16 @@ Puede solicitar permiso para leerlas.",
     row.append(&info);
     widget.append(&row);
     let current = Rc::new(RefCell::new(None::<(String, Rc<Client>)>));
+    let logout = gtk::LinkButton::with_label("about:blank", "Cerrar sesión");
+    logout.set_widget_name("ai-logout");
+    logout.set_halign(gtk::Align::End);
+    logout.set_visible(false);
+    widget.append(&logout);
+    let logout_client = current.clone();
+    logout.connect_activate_link(move |_| {
+        if let Some((_, client)) = logout_client.borrow().as_ref() { client.logout(); }
+        glib::Propagation::Stop
+    });
     let dialogs: Dialogs = Rc::new(RefCell::new(HashMap::new()));
     let generation = Rc::new(Cell::new(0_u64));
     let weak = welcome.downgrade();
@@ -680,8 +690,10 @@ Puede solicitar permiso para leerlas.",
         let p = process.clone();
         let s = Rc::downgrade(state);
         let login_button = login_button.downgrade();
+        let logout = logout.downgrade();
         let effort = effort.downgrade();
         Rc::new(move |mut agent, login| {
+            if let Some(link) = logout.upgrade() { link.set_visible(false); }
             if let Some(button) = login_button.upgrade() {
                 button.set_visible(!agent.kind.is_api());
             }
@@ -780,10 +792,13 @@ Puede solicitar permiso para leerlas.",
             let configured_models = agent.models.clone();
             let preferred_model = agent.model.clone();
             let login_button = login_button.clone();
+            let logout = logout.clone();
             let reasoning_selector = effort.clone();
             let usage = usage.clone();
             let mut ready = false;
             let mut provider_authenticated = false;
+            #[cfg(debug_assertions)]
+            let mut logout_test_started = false;
             let recent = recent.clone();
             let models = models.clone();
             let model = model.clone();
@@ -963,6 +978,9 @@ Puede solicitar permiso para leerlas.",
                             }
                         }
                         Event::Ready(authenticated) => {
+                            if let Some(link) = logout.upgrade() {
+                                link.set_visible(codex_profile && authenticated);
+                            }
                             if let Some(button) = login_button.upgrade() {
                                 button
                                     .set_visible(!(api_profile || provider_authenticated || codex_profile && authenticated));
@@ -983,6 +1001,20 @@ Puede solicitar permiso para leerlas.",
                             });
                             browser.set_visible(false);
                             browser.set_uri("about:blank");
+                            #[cfg(debug_assertions)]
+                            if codex_profile && std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("logout") {
+                                if authenticated && !logout_test_started {
+                                    let link = logout.upgrade().expect("Logout link");
+                                    assert!(link.is_visible());
+                                    logout_test_started = true;
+                                    link.emit_by_name::<bool>("activate-link", &[]);
+                                } else if !authenticated && logout_test_started {
+                                    assert!(login_button.upgrade().unwrap().is_visible());
+                                    assert!(!logout.upgrade().unwrap().is_visible());
+                                    assert_eq!(usage.account.text().as_str(), "Usuario: no disponible");
+                                    eprintln!("NEXUTERM_SMOKE_LOGOUT_OK");
+                                }
+                            }
                         }
                         Event::Status(text) => {
                             #[cfg(debug_assertions)]
@@ -1172,6 +1204,7 @@ Puede solicitar permiso para leerlas.",
                             info.set_text(&error);
                         }
                         Event::Closed => {
+                            if let Some(link) = logout.upgrade() { link.set_visible(false); }
                             if let Some(button) = login_button.upgrade() { button.set_visible(!api_profile); }
                             close_dialogs(&dialogs);
                             send.set_sensitive(false);
@@ -1183,6 +1216,7 @@ Puede solicitar permiso para leerlas.",
                 if let Some(welcome) = welcome.upgrade() {
                     welcome.set_visible(list.first_child().is_none());
                 }
+                if let Some(link) = logout.upgrade() { link.set_sensitive(!client.busy()); }
                 send.set_sensitive(ready && !client.busy());
                 if client.busy() {
                     spinner.start();

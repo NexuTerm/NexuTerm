@@ -337,3 +337,45 @@ async fn unavailable_quota_does_not_break_the_conversation() {
     }
     client.close();
 }
+
+#[test]
+fn logout_clears_account_and_allows_new_web_login() {
+    let fixture = Fixture::new(false);
+    nexuterm::runtime::runtime().block_on(async {
+        let (client, mut rx) = fixture.start();
+        loop {
+            match event(&mut rx).await {
+                Event::Ready(true) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        assert!(client.logout());
+        loop {
+            match event(&mut rx).await {
+                Event::Ready(false) => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        client.login();
+        let mut opened = false;
+        loop {
+            match event(&mut rx).await {
+                Event::LoginUrl(_) => opened = true,
+                Event::Ready(true) if opened => break,
+                Event::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        client.close();
+    });
+    assert_eq!(
+        fixture
+            .requests()
+            .iter()
+            .filter(|r| r["method"] == "account/logout")
+            .count(),
+        1
+    );
+}

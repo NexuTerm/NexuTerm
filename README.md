@@ -113,7 +113,8 @@ Un método ACP que exige una terminal puede no permitir acceso web desde el chat
 se puede usar una clave API admitida por el proveedor.
 Si el proveedor no ofrece ese flujo, configura su clave API y, para agentes nativos,
 la variable de credencial correspondiente. El botón se oculta cuando Codex confirma
-una sesión autenticada o Copilot tiene una cuenta guardada en su perfil.
+una sesión autenticada o Copilot tiene una cuenta guardada en su perfil. En Codex,
+**Cerrar sesión** utiliza el cierre oficial del servidor y vuelve a mostrar el acceso.
 
 Cada perfil tiene su directorio privado bajo `$XDG_DATA_HOME/nexuterm/agents/`.
 Su autenticación y extensiones no se comparten con otros perfiles ni se copian desde

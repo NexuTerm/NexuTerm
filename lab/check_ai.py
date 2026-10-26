@@ -343,6 +343,20 @@ def check_opencode():
         print("PASS installed OpenCode: native MCP handshake, skill discovery, primary agent and subagent")
 
 
+def check_logout():
+    with tempfile.TemporaryDirectory(prefix="nexuterm-logout-gui-") as directory:
+        directory = Path(directory)
+        cli = directory / "codex"
+        cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab/codex_fixture.py").read_text())
+        cli.chmod(0o700)
+        profile = dict(id="codex-logout", name="Codex", kind="Codex", program=str(cli), directory=str(directory))
+        _, logs = run("logout", profile, directory)
+        assert "NEXUTERM_SMOKE_LOGOUT_OK" in logs, logs
+        requests = [json.loads(line) for line in (directory / "protocol.jsonl").read_text().splitlines()]
+        assert any(r.get("method") == "account/logout" for r in requests)
+        print("PASS graphical logout: link and restored login")
+
+
 def check_copilot_account():
     import hashlib
     with tempfile.TemporaryDirectory(prefix="nexuterm-copilot-account-") as directory:
@@ -361,6 +375,7 @@ def check_copilot_account():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_logout()
     check_copilot_account()
     check_usage()
     check_new_chat()

@@ -23,6 +23,11 @@ for line in sys.stdin:
     result = {}
     if method == 'account/read':
         result = dict(account=dict(type='chatgpt', email='fixture@example.invalid', planType='free') if account else None, requiresOpenaiAuth=True)
+    elif method == 'account/logout':
+        account = False
+        emit(dict(id=ident, result={}))
+        notify('account/updated', dict(authMode=None, planType=None))
+        continue
     elif method == 'account/login/start':
         assert params == dict(type='chatgpt', useHostedLoginSuccessPage=True)
         emit(dict(id=ident, result=dict(type='chatgpt', loginId='fixture-login', authUrl='https://example.invalid/login')))

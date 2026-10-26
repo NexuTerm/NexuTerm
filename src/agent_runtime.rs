@@ -417,7 +417,7 @@ async fn acp(
            else if !model.is_empty()&&model!=model_current{
             let (method,params)=if model_option.is_empty(){("session/set_model",json!({"sessionId":session,"modelId":model}))}else{("session/set_config_option",json!({"sessionId":session,"configId":model_option,"value":model}))};request(&mut input,&mut pending,&mut seq,method,params).await?;
            }else{let mode=if writable{"build"}else{"plan"};if modes.iter().any(|v|v==mode){request(&mut input,&mut pending,&mut seq,"session/set_mode",json!({"sessionId":session,"modeId":mode})).await?;}else{send_prompt(&mut input,&mut pending,&mut seq,&session,&agent,&mut queued,&mut item).await?;}}
-          },Some(Command::Resume(_))=>{}
+          },Some(Command::Logout)=>{busy.store(false,Ordering::Relaxed);},Some(Command::Resume(_))=>{}
          }},
          frame=frames.recv()=>{let Some(frame)=frame else{return Err(());};activity=tokio::time::Instant::now();
           if let Some(method)=frame["method"].as_str(){let params=&frame["params"];
