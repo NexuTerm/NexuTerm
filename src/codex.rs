@@ -50,7 +50,7 @@ pub enum Event {
 }
 pub(crate) enum Command {
     Credentials(Result<zeroize::Zeroizing<String>, String>),
-    Send(String, String, String),
+    Send(String, String, String, Option<String>),
     Resume(String),
     Permissions(bool),
     Login,
@@ -100,12 +100,15 @@ impl Client {
         self.send_with_options(text, String::new(), String::new())
     }
     pub fn send_with_options(&self, text: String, model: String, effort: String) -> bool {
+        self.send_in_directory(text, model, effort, None)
+    }
+    pub fn send_in_directory(&self, text: String, model: String, effort: String, directory: Option<String>) -> bool {
         if self.busy.swap(true, Ordering::Relaxed) {
             return false;
         }
         if self
             .commands
-            .try_send(Command::Send(text, model, effort))
+            .try_send(Command::Send(text, model, effort, directory))
             .is_err()
         {
             self.busy.store(false, Ordering::Relaxed);
@@ -242,8 +245,9 @@ async fn start_turn(
     text: String,
     model: &str,
     effort: &str,
+    directory: &str,
 ) -> Result<(), ()> {
-    let mut params = json!({"threadId":thread,"input":[{"type":"text","text":text}]});
+    let mut params = json!({"threadId":thread,"input":[{"type":"text","text":text}],"cwd":directory});
     if !model.is_empty() {
         params["model"] = json!(model);
     }
@@ -259,7 +263,7 @@ async fn run(
     events: mpsc::Sender<Event>,
     busy: Arc<AtomicBool>,
 ) -> Result<(), ()> {
-    let directory = if agent.directory.is_empty() {
+    let mut directory = if agent.directory.is_empty() {
         std::env::var("HOME").unwrap_or_else(|_| "/".into())
     } else {
         agent.directory.clone()
@@ -346,7 +350,15 @@ async fn run(
                     if !authenticated || !initialized { busy.store(false, Ordering::Relaxed); continue; }
                     request(&mut input, &mut pending, &mut seq, "thread/resume", json!({"threadId":id,"cwd":directory,"approvalPolicy":"untrusted","sandbox":if writable {"workspace-write"} else {"read-only"}})).await?;
                 }
-                Some(Command::Send(text, model, effort)) => {
+                Some(Command::Send(text, model, effort, cwd)) => {
+                    if let Some(cwd) = cwd {
+                        if !std::path::Path::new(&cwd).is_absolute() || !std::path::Path::new(&cwd).is_dir() {
+                            busy.store(false,Ordering::Relaxed);
+                            events.send(Event::Error("La carpeta de la terminal ya no está disponible.".into())).await.map_err(|_|())?;
+                            continue;
+                        }
+                        directory=cwd;
+                    }
                     selected_model = model; selected_effort = effort;
                     stopping = false;
                     if !initialized || !authenticated {
@@ -358,7 +370,7 @@ async fn run(
                         if !agent.model.is_empty() { params["model"]=json!(agent.model); }
                         if !agent.system_prompt.is_empty() { params["developerInstructions"]=json!(agent.system_prompt); }
                         request(&mut input,&mut pending,&mut seq,"thread/start",params).await?;
-                    } else { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort).await?; }
+                    } else { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; }
                 }
             }
             },
@@ -368,7 +380,9 @@ async fn run(
                 if let Some(method) = frame["method"].as_str() {
                     let params = &frame["params"];
                     if frame.get("id").is_some() {
-                        events.send(Event::Request{id:frame["id"].clone(),method:method.into(),params:params.clone()}).await.map_err(|_| ())?;
+                        let mut params=params.clone();
+                        if method == "item/fileChange/requestApproval" && !params["cwd"].is_string() { params["cwd"]=json!(directory); }
+                        events.send(Event::Request{id:frame["id"].clone(),method:method.into(),params}).await.map_err(|_| ())?;
                         continue;
                     }
                     match method {
@@ -475,7 +489,7 @@ async fn run(
                     }
                     "thread/start" => {
                         thread=result["thread"]["id"].as_str().ok_or(())?.into();
-                        if let Some(text)=queued.take() { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort).await?; } else { busy.store(false,Ordering::Relaxed); }
+                        if let Some(text)=queued.take() { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; } else { busy.store(false,Ordering::Relaxed); }
                     }
                     "turn/start" => {
                         turn=result["turn"]["id"].as_str().unwrap_or("").into();

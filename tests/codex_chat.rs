@@ -379,3 +379,53 @@ fn logout_clears_account_and_allows_new_web_login() {
         1
     );
 }
+
+#[test]
+fn per_turn_workspace_tracks_terminal_directory_without_replacing_thread() {
+    let fixture = Fixture::new(false);
+    let first = fixture.0.join("first project");
+    let second = fixture.0.join("second project");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    nexuterm::runtime::runtime().block_on(async {
+        let (client, mut rx) = fixture.start();
+        loop {
+            if matches!(event(&mut rx).await, Event::Ready(true)) {
+                break;
+            }
+        }
+        for directory in [&first, &second] {
+            assert!(client.send_in_directory(
+                "Informe".into(),
+                String::new(),
+                String::new(),
+                Some(directory.to_string_lossy().into())
+            ));
+            loop {
+                match event(&mut rx).await {
+                    Event::Finished(status) => {
+                        assert_eq!(status, "completed");
+                        break;
+                    }
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+        }
+        client.close();
+    });
+    let requests = fixture.requests();
+    let starts = requests
+        .iter()
+        .filter(|r| r["method"] == "thread/start")
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0]["params"]["cwd"], first.to_string_lossy().as_ref());
+    let turns = requests
+        .iter()
+        .filter(|r| r["method"] == "turn/start")
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0]["params"]["cwd"], first.to_string_lossy().as_ref());
+    assert_eq!(turns[1]["params"]["cwd"], second.to_string_lossy().as_ref());
+}

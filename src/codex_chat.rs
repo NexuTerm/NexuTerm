@@ -758,6 +758,9 @@ Puede solicitar permiso para leerlas.",
         let logout = logout.downgrade();
         let effort = effort.downgrade();
         Rc::new(move |mut agent, login| {
+            if let Some(directory) = s.upgrade().and_then(|state|agent_workspace(&state)).and_then(|workspace|workspace.local_directory) {
+                agent.directory = directory.to_string_lossy().into_owned();
+            }
             if let Some(link) = logout.upgrade() { link.set_visible(false); }
             if let Some(button) = login_button.upgrade() {
                 button.set_visible(!agent.kind.is_api());
@@ -866,6 +869,8 @@ Puede solicitar permiso para leerlas.",
             let mut provider_authenticated = false;
             #[cfg(debug_assertions)]
             let mut logout_test_started = false;
+            #[cfg(debug_assertions)]
+            let mut workspace_turns = 0;
             let recent = recent.clone();
             let models = models.clone();
             let model = model.clone();
@@ -1225,6 +1230,21 @@ Puede solicitar permiso para leerlas.",
                         }
                         Event::Finished(status) => {
                             #[cfg(debug_assertions)]
+                            if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("workspace") && status == "completed" {
+                                workspace_turns += 1;
+                                if workspace_turns == 1 {
+                                    let state = s.upgrade().unwrap();
+                                    let terminal = state.focused_terminal.borrow().upgrade().unwrap();
+                                    let next = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("second project");
+                                    terminal.feed_child(format!("{}\n",next.display()).as_bytes());
+                                    let input = input.clone(); let send = send.downgrade();
+                                    glib::timeout_add_local_once(std::time::Duration::from_millis(200),move || {
+                                        input.upgrade().unwrap().buffer().set_text("segundo proyecto");
+                                        send.upgrade().unwrap().emit_clicked();
+                                    });
+                                } else { eprintln!("NEXUTERM_SMOKE_WORKSPACE_OK"); }
+                            }
+                            #[cfg(debug_assertions)]
                             if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("approval-repeat" | "approval-session" | "approval-always")) {
                                 assert!(dialogs.borrow().is_empty(), "Resolved approval windows must be removed");
                                 eprintln!("NEXUTERM_SMOKE_APPROVALS_FINISHED");
@@ -1317,6 +1337,7 @@ Puede solicitar permiso para leerlas.",
     let mode_weak = mode.downgrade();
     let paths = context.clone();
     let chips = context_row.downgrade();
+    let workspace_state = Rc::downgrade(state);
     send.connect_clicked(move |_| {
         let (Some(input), Some(list), Some(info)) =
             (input.upgrade(), list_weak.upgrade(), status.upgrade())
@@ -1341,9 +1362,14 @@ Puede solicitar permiso para leerlas.",
         let selected_effort=if effort_index==0{String::new()}else{models.borrow().get(chosen).and_then(|v|v["supportedReasoningEfforts"].as_array()).and_then(|v|v.get(effort_index-1)).and_then(|v|v["reasoningEffort"].as_str()).unwrap_or("").to_owned()};
         let context_text=paths.borrow().iter().map(|p|serde_json::to_string(&p.to_string_lossy()).unwrap_or_default()).collect::<Vec<_>>().join("\n");
         let prompt=if context_text.is_empty(){text.clone()}else{format!("{text}\n\nRutas de contexto seleccionadas por el usuario (leer solo cuando sea necesario):\n{context_text}")};
+        let workspace = workspace_state.upgrade().and_then(|state|agent_workspace(&state));
+        let directory = workspace.as_ref().and_then(|workspace|workspace.local_directory.as_ref()).map(|path|path.to_string_lossy().into_owned());
+        let prompt = if let Some(workspace) = workspace {
+            format!("{prompt}\n\nContexto de trabajo de la terminal activa (actual):\n{}\nUsa esta carpeta como base de trabajo salvo que el usuario indique otra. No elijas otro proyecto por el historial. Ejecuta los comandos desde el cwd indicado, con un argumento cwd o un cd explícito si el motor conserva otra carpeta. Si la terminal es remota, utiliza las herramientas de esa terminal; su ruta no es una carpeta local. Si no se conoce la ruta remota, consulta la terminal con los permisos correspondientes.", workspace.context)
+        } else { prompt };
         let attached=paths.borrow().iter().map(|p|p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect::<Vec<_>>().join(", ");
         if let Some(mode)=mode_weak.upgrade(){client.permissions(mode.selected()==1);}
-        if client.send_with_options(prompt,selected_model,selected_effort) {
+        if client.send_in_directory(prompt,selected_model,selected_effort,directory) {
             if let Some(mode)=mode_weak.upgrade(){mode.set_sensitive(false);}
             paths.borrow_mut().clear();if let Some(chips)=chips.upgrade(){while let Some(child)=chips.first_child(){chips.remove(&child);}chips.set_visible(false);}
             message(&list, "Tú", &if attached.is_empty(){text.clone()}else{format!("{text}\n\nContexto: {attached}")}, false);
@@ -1370,7 +1396,7 @@ Puede solicitar permiso para leerlas.",
     #[cfg(debug_assertions)]
     if matches!(
         std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
-        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "acp" | "api" | "shutdown" | "switch")
+        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "workspace" | "acp" | "api" | "shutdown" | "switch")
     ) {
         let input = composer.downgrade();
         let send = send.downgrade();

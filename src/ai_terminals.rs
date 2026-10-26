@@ -280,6 +280,21 @@ fn smoke(state: &Rc<State>, broker: &Rc<Broker>) {
         })
         .unwrap();
         terminal_in(&state, "Remoto de prueba", spec, None, Some(remote));
+        let context_state = Rc::downgrade(&state);
+        let context_attempts = Cell::new(0);
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            context_attempts.set(context_attempts.get()+1);
+            assert!(context_attempts.get()<20, "Remote terminal context did not become available");
+            let state = context_state.upgrade().unwrap();
+            if let Some(workspace) = super::agent_workspace(&state)
+                && workspace.context["remote"] == true {
+                    assert!(workspace.local_directory.is_none());
+                    assert_eq!(workspace.context["host"], "remote.example.invalid");
+                    eprintln!("NEXUTERM_SMOKE_REMOTE_WORKSPACE_OK");
+                    return glib::ControlFlow::Break;
+                }
+            glib::ControlFlow::Continue
+        });
         let mut worker = nexuterm::runtime::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             let list =

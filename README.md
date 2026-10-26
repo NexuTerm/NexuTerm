@@ -86,6 +86,15 @@ conversaciones anteriores. Si el catálogo aún no se ha cargado, se puede elegi
 modelo predeterminado y cambiarlo después en el editor. Se pueden mantener hasta ocho
 chats abiertos; cerrar una pestaña adicional detiene únicamente su conexión.
 
+Al abrir un chat, la carpeta de la terminal local activa tiene prioridad sobre la
+carpeta configurada en el perfil, sin modificar ese perfil. Cada mensaje vuelve a
+capturar el directorio y la terminal actuales. Codex actualiza también el `cwd` de
+cada turno, conservando la conversación. Los agentes ACP reciben el directorio al
+crear su sesión y los cambios posteriores como contexto explícito del mensaje;
+las API reciben ese mismo contexto. Una ruta SSH se identifica como remota y no
+se utiliza como carpeta local del proceso. Si no hay una terminal activa, se
+conserva la carpeta configurada del agente.
+
 Cada chat muestra el usuario y la cuota restante cuando el proveedor los comunica.
 Codex presenta las ventanas de **5 horas** y **semanal** en porcentaje, si están
 incluidas en su respuesta, y la hora de renovación en la ayuda del indicador. Las

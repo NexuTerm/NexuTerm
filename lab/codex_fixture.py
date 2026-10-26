@@ -53,7 +53,7 @@ for line in sys.stdin:
         assert params['threadId'] == 'fixture-thread'
         turn += 1
         emit(dict(id=ident, result=dict(turn=dict(id=f'turn-{turn}'))))
-        text = params['input'][0]['text']
+        text = params['input'][0]['text'].split('\n\nContexto de trabajo')[0]
         if text == 'approval':
             approval_index = 1
             item = dict(type='commandExecution', id='tool', command='printf fixture', cwd=str(Path.cwd()), status='inProgress')

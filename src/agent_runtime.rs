@@ -135,7 +135,7 @@ async fn api(
                     emit(&events, Event::Error(error)).await?;
                 }
             },
-            Some(Command::Send(text, model, _)) => {
+            Some(Command::Send(text, model, _, _)) => {
                 if !loaded {
                     busy.store(false, Ordering::Relaxed);
                     continue;
@@ -412,7 +412,7 @@ async fn acp(
            let accept=reply["result"]["decision"]=="accept";let option=params["options"].as_array().and_then(|o|o.iter().find(|o|o["kind"]==if accept{"allow_once"}else{"reject_once"})).and_then(|o|o["optionId"].as_str());
            let outcome=option.map(|id|json!({"outcome":"selected","optionId":id})).unwrap_or_else(||json!({"outcome":"cancelled"}));write(&mut input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":outcome}})).await?;
           }},
-          Some(Command::Send(text,model,_))=>{stopping=false;queued=Some((text,model.clone()));
+          Some(Command::Send(text,model,_,_))=>{stopping=false;queued=Some((text,model.clone()));
            if session.is_empty(){busy.store(false,Ordering::Relaxed);queued=None;emit(&events,Event::Error("El agente no tiene una sesión preparada. Revisa la autenticación.".into())).await?;}
            else if !model.is_empty()&&model!=model_current{
             let (method,params)=if model_option.is_empty(){("session/set_model",json!({"sessionId":session,"modelId":model}))}else{("session/set_config_option",json!({"sessionId":session,"configId":model_option,"value":model}))};request(&mut input,&mut pending,&mut seq,method,params).await?;

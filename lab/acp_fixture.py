@@ -31,7 +31,7 @@ for line in sys.stdin:
         assert params['modeId'] in ('plan', 'build')
     elif method == 'session/prompt':
         turn_id = ident
-        text = params['prompt'][0]['text']
+        text = params['prompt'][0]['text'].split('\n\nContexto de trabajo')[0]
         if text == 'approval':
             emit(dict(jsonrpc='2.0', id='permission', method='session/request_permission', params=dict(sessionId='fixture-session', toolCall=dict(toolCallId='tool-1', title='Fake command', kind='execute', rawInput=dict(command='printf fixture')), options=[dict(kind='allow_once', optionId='yes', name='Permitir'), dict(kind='reject_once', optionId='no', name='Rechazar')])))
             continue

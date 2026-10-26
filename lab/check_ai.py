@@ -42,7 +42,7 @@ def run(mode, profile, directory, profiles=None):
     elif not env.get("DISPLAY"):
         raise RuntimeError("Requires xvfb-run or an available DISPLAY")
     try:
-        result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(command, cwd=directory, env=env, capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired as error:
         (ARTIFACTS / f"ai-{profile['id']}.log").write_bytes((error.stdout or b"") + (error.stderr or b""))
         raise
@@ -63,10 +63,10 @@ def check_api(kind):
             messages = body["input" if kind == "Responses" else "messages"]
             events.append((self.path, body))
             index = len(events)
-            assert messages[-1]["content"] == ("primer-mensaje" if index == 1 else "segundo-mensaje")
+            assert messages[-1]["content"].split("\n\nContexto de trabajo")[0] == ("primer-mensaje" if index == 1 else "segundo-mensaje")
             if index == 2:
                 assert messages[-2] == dict(role="assistant", content="fixture-1")
-                assert messages[-3] == dict(role="user", content="primer-mensaje")
+                assert messages[-3]["role"] == "user" and messages[-3]["content"].startswith("primer-mensaje")
             if kind == "Responses":
                 assert body["store"] is False
                 reply = dict(status="completed", output=[dict(type="message", content=[dict(type="output_text", text=f"fixture-{index}")])])
@@ -103,6 +103,7 @@ def check_terminals():
         _, logs = run("terminals", profile, Path(directory))
         assert "NEXUTERM_SMOKE_TERMINALS_OK" in logs, logs
         assert "NEXUTERM_SMOKE_TERMINAL_GRANT_USED" in logs, logs
+        assert "NEXUTERM_SMOKE_REMOTE_WORKSPACE_OK" in logs, logs
         print("PASS terminal bridge: two simulated sessions, explicit execution/read approval")
 
 
@@ -344,6 +345,35 @@ def check_opencode():
         print("PASS installed OpenCode: native MCP handshake, skill discovery, primary agent and subagent")
 
 
+def check_terminal_workspace(kind):
+    with tempfile.TemporaryDirectory(prefix="nexuterm-workspace-") as directory:
+        directory = Path(directory)
+        first, second, wrong = [directory / name for name in ("active project", "second project", "StaffForge")]
+        for path in (first, second, wrong):
+            path.mkdir()
+        cli = directory / ("codex" if kind == "Codex" else "acp")
+        fixture = "codex_fixture.py" if kind == "Codex" else "acp_fixture.py"
+        cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab" / fixture).read_text())
+        cli.chmod(0o700)
+        profile = dict(id="workspace-" + kind, name=kind, kind=kind, program=str(cli), directory=str(wrong))
+        config, logs = run("workspace", profile, directory)
+        assert "NEXUTERM_SMOKE_WORKSPACE_OK" in logs, logs
+        assert config["ai_agents"][0]["directory"] == str(wrong), "Runtime context must not rewrite the saved profile"
+        trace = [json.loads(line) for line in (first / ("protocol.jsonl" if kind == "Codex" else "acp-protocol.jsonl")).read_text().splitlines()]
+        if kind == "Codex":
+            starts = [r for r in trace if r.get("method") == "thread/start"]
+            assert len(starts) == 1 and starts[0]["params"]["cwd"] == str(first)
+            turns = [r for r in trace if r.get("method") == "turn/start"]
+            assert [r["params"]["cwd"] for r in turns] == [str(first), str(second)]
+            prompts = [r["params"]["input"][0]["text"] for r in turns]
+        else:
+            starts = [r for r in trace if r.get("method") == "session/new"]
+            assert starts[0]["params"]["cwd"] == str(first)
+            prompts = [r["params"]["prompt"][0]["text"] for r in trace if r.get("method") == "session/prompt"]
+        assert len(prompts) == 2 and str(first) in prompts[0] and str(second) in prompts[1]
+        print("PASS terminal workspace: " + kind + " starts in active project and follows cd without resetting chat")
+
+
 def check_repeated_approvals(mode):
     with tempfile.TemporaryDirectory(prefix="nexuterm-repeat-approval-") as directory:
         directory = Path(directory)
@@ -396,6 +426,8 @@ def check_copilot_account():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_terminal_workspace("Codex")
+    check_terminal_workspace("Acp")
     for mode in ("approval-repeat", "approval-session", "approval-always"):
         check_repeated_approvals(mode)
     check_logout()

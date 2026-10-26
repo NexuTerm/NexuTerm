@@ -778,6 +778,8 @@ fn local_terminal(state: &Rc<State>) {
                     if cfg!(debug_assertions) && std::env::var_os("NEXUTERM_SMOKE_COLORS").is_some()
                     {
                         "printf 'Terminal · texto normal y colores ANSI\\n\\n'; for c in 30 31 32 33 34 35 36 37 90 91 92 93 94 95 96 97; do printf '\\033[%sm Color %s: archivos, avisos y resultados\\033[0m\\n' $c $c; done; printf '\\nTexto normal sin blanco o negro puros.\\n'; sleep 1".into()
+                    } else if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("workspace") {
+                        r#"cd "$HOME/active project" || exit; while IFS= read -r path; do cd "$path" || exit; done"#.into()
                     } else if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
                         "printf 'NexuTerm: PTY operativo\\n'; sleep 10".into()
                     } else {
@@ -1781,6 +1783,32 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
         });
     });
     dialog.present();
+}
+
+struct AgentWorkspace {
+    local_directory: Option<PathBuf>,
+    context: serde_json::Value,
+}
+fn agent_workspace(state: &State) -> Option<AgentWorkspace> {
+    let terminal = state.focused_terminal.borrow().upgrade()?;
+    let session = state.sessions.borrow().iter().filter_map(Weak::upgrade)
+        .find(|session| session.terminal.upgrade().as_ref() == Some(&terminal) && session.pid.get().is_some())?;
+    let remote = session.connection.is_some() || std::path::Path::new(&session.spec.program).file_name().is_some_and(|name|name == "ssh" || name == "telnet");
+    let reported = terminal.current_directory_uri().and_then(|uri|url::Url::parse(&uri).ok()).filter(|uri|uri.scheme() == "file");
+    let local_directory = if remote { None } else {
+        session.pid.get().and_then(|pid|std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+            .or_else(||reported.as_ref().and_then(|uri|uri.to_file_path().ok()))
+            .filter(|path|path.is_absolute() && path.is_dir())
+    };
+    let remote_directory = if remote {
+        reported.filter(|uri|session.connection.as_ref().is_some_and(|connection|uri.host_str() == Some(connection.profile.host.as_str())))
+            .and_then(|mut uri| {uri.set_host(None).ok()?; uri.to_file_path().ok()})
+    } else { None };
+    let directory = local_directory.as_ref().or(remote_directory.as_ref());
+    Some(AgentWorkspace {
+        context: serde_json::json!({"terminal_id":session.id,"remote":remote,"host":session.connection.as_ref().map(|connection|connection.profile.host.as_str()),"cwd":directory}),
+        local_directory,
+    })
 }
 
 fn sync_local_directory(state: &State, term: &vte4::Terminal) {
