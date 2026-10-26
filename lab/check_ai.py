@@ -384,6 +384,7 @@ def check_repeated_approvals(mode):
         profile = dict(id=mode, name="Codex", kind="Codex", program=str(cli), directory=str(directory))
         _, logs = run(mode, profile, directory)
         assert "NEXUTERM_SMOKE_APPROVALS_FINISHED" in logs, logs
+        assert "NEXUTERM_SMOKE_APPROVAL_COMPACT_OK" in logs, logs
         if mode == "approval-repeat":
             assert logs.count("NEXUTERM_SMOKE_CODEX_APPROVAL_ACCEPTED") == 2, logs
         else:

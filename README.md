@@ -130,6 +130,7 @@ Los avisos rutinarios de agente listo y respuesta completada no ocupan una fila.
 
 Las aprobaciones ofrecen **Permitir una vez**, **Permitir en esta sesión** y
 **Permitir siempre** para la misma operación exacta y carpeta de ese agente.
+Los cuatro botones de decisión se muestran en una sola fila compacta.
 Los permisos de sesión del chat desaparecen al cerrar o cambiar su conexión;
 los de terminal duran mientras está abierta la aplicación y se limitan a esa
 terminal y carpeta. Los persistentes se guardan como huellas, sin comandos ni

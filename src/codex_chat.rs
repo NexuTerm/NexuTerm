@@ -312,7 +312,9 @@ fn request_dialog(
         .child(&body)
         .build();
     root.append(&scroll);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    buttons.add_css_class("ai-approval-actions");
+    buttons.set_halign(gtk::Align::End);
     let reject = gtk::Button::with_label("Rechazar");
     let accept = gtk::Button::with_label(if question {
         "Responder"
@@ -325,6 +327,8 @@ fn request_dialog(
     root.append(&buttons);
     let grant_error = gtk::Label::new(None);
     grant_error.set_wrap(true);
+    grant_error.set_visible(false);
+    grant_error.connect_label_notify(|label|label.set_visible(!label.text().is_empty()));
     root.append(&grant_error);
     window.set_child(Some(&root));
     let done = Rc::new(Cell::new(false));
@@ -359,12 +363,11 @@ fn request_dialog(
         }
     });
     if approval {
-        let remembered = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         for (label, always) in [("Permitir en esta sesión", false), ("Permitir siempre", true)] {
             let button = gtk::Button::with_label(label);
             button.set_sensitive(key.is_some());
             button.set_tooltip_text(Some("Solo esta operación exacta, en esta carpeta y para este agente"));
-            remembered.append(&button);
+            buttons.append(&button);
             let done = done.clone(); let client = client.clone(); let id = id.clone();
             let weak = window.downgrade(); let grants = grants.clone(); let key = key.clone();
             let error = grant_error.clone();
@@ -377,7 +380,6 @@ fn request_dialog(
                 if let Some(window) = weak.upgrade() { window.close(); }
             });
         }
-        root.append(&remembered);
     }
     let weak = window.downgrade();
     reject.connect_clicked(move |_| {
@@ -406,8 +408,16 @@ fn request_dialog(
         let weak = window.downgrade();
         let reject = reject.downgrade();
         let accept = accept.downgrade();
+        let actions = buttons.downgrade();
         glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
             if let Some(window) = weak.upgrade() {
+                let actions = actions.upgrade().unwrap();
+                assert_eq!(actions.orientation(), gtk::Orientation::Horizontal);
+                assert!(actions.height() <= 28, "Approval buttons must stay compact");
+                let mut count = 0; let mut child = actions.first_child();
+                while let Some(button) = child { count += 1; child = button.next_sibling(); }
+                assert_eq!(count, if approval {4} else {2});
+                eprintln!("NEXUTERM_SMOKE_APPROVAL_COMPACT_OK");
                 if let Some(path) = std::env::var_os("NEXUTERM_SCREENSHOT") {
                     let path = std::path::PathBuf::from(path)
                         .with_file_name("ai-codex-approval-dialog.png");

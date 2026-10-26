@@ -53,6 +53,7 @@
 .ai-panel button.flat { padding: 5px; }
 .ai-panel dropdown.flat > button { background: transparent; box-shadow: none; border: none; padding: 4px; }
 .ai-panel button.ai-auth-control { min-height: 0; min-width: 0; padding: 1px 4px; margin: 0; font-size: 0.85em; font-weight: normal; }
+.ai-approval-actions button { min-height: 20px; min-width: 0; padding: 2px 6px; font-size: 0.9em; font-weight: normal; }
 
 .ai-composer { background: alpha(currentColor, 0.035); }
 .ai-composer textview, .ai-composer textview text { background: transparent; }
