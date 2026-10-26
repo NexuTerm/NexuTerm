@@ -156,7 +156,8 @@ fn tool_text(item: &Value) -> String {
     }
 }
 fn close_dialogs(dialogs: &Dialogs) {
-    for (_, (window, done)) in dialogs.borrow_mut().drain() {
+    let pending = dialogs.borrow_mut().drain().map(|(_, value)| value).collect::<Vec<_>>();
+    for (window, done) in pending {
         done.set(true);
         if let Some(window) = window.upgrade() {
             window.close();
@@ -207,7 +208,7 @@ fn request_dialog(
     }
     let window = gtk::Window::builder()
         .transient_for(parent)
-        .modal(true)
+        .modal(question)
         .destroy_with_parent(true)
         .title(if question {
             "Codex necesita tu respuesta"
@@ -349,7 +350,11 @@ fn request_dialog(
             w.close();
         }
     });
-    window.connect_close_request(move |_| {
+    let tracked = Rc::downgrade(dialogs);
+    let request_key = id.to_string();
+    window.connect_close_request(move |window| {
+        window.set_modal(false);
+        if let Some(dialogs) = tracked.upgrade() { dialogs.borrow_mut().remove(&request_key); }
         if !done.replace(true) {
             if question {
                 client.reply(id.clone(), json!({"answers":{}}));
@@ -362,9 +367,10 @@ fn request_dialog(
     });
     window.present();
     #[cfg(debug_assertions)]
-    if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("codex-approval") {
+    if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat")) {
         let weak = window.downgrade();
         let reject = reject.downgrade();
+        let accept = accept.downgrade();
         glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
             if let Some(window) = weak.upgrade() {
                 if let Some(path) = std::env::var_os("NEXUTERM_SCREENSHOT") {
@@ -380,9 +386,16 @@ fn request_dialog(
                             .unwrap();
                     }
                 }
-                if let Some(reject) = reject.upgrade() {
-                    reject.emit_clicked();
-                    eprintln!("NEXUTERM_SMOKE_CODEX_APPROVAL_REJECTED");
+                match std::env::var("NEXUTERM_SMOKE_AI").as_deref() {
+                    Ok("approval-repeat") => {
+                        assert!(!window.is_modal());
+                        accept.upgrade().unwrap().emit_clicked();
+                        eprintln!("NEXUTERM_SMOKE_CODEX_APPROVAL_ACCEPTED");
+                    }
+                    _ => if let Some(reject) = reject.upgrade() {
+                        reject.emit_clicked();
+                        eprintln!("NEXUTERM_SMOKE_CODEX_APPROVAL_REJECTED");
+                    }
                 }
             }
         });
@@ -1070,9 +1083,8 @@ Puede solicitar permiso para leerlas.",
                         Event::Item(item) => {
                             let kind = item["type"].as_str().unwrap_or("");
                             if kind == "requestResolved" {
-                                if let Some((window, done)) =
-                                    dialogs.borrow_mut().remove(&item["requestId"].to_string())
-                                {
+                                let resolved = dialogs.borrow_mut().remove(&item["requestId"].to_string());
+                                if let Some((window, done)) = resolved {
                                     done.set(true);
                                     if let Some(window) = window.upgrade() {
                                         window.close();
@@ -1160,6 +1172,11 @@ Puede solicitar permiso para leerlas.",
                             }
                         }
                         Event::Finished(status) => {
+                            #[cfg(debug_assertions)]
+                            if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("approval-repeat")) {
+                                assert!(dialogs.borrow().is_empty(), "Resolved approval windows must be removed");
+                                eprintln!("NEXUTERM_SMOKE_APPROVALS_FINISHED");
+                            }
                             #[cfg(debug_assertions)]
                             if api_profile
                                 && std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("api")
@@ -1301,7 +1318,7 @@ Puede solicitar permiso para leerlas.",
     #[cfg(debug_assertions)]
     if matches!(
         std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
-        Ok("codex" | "codex-approval" | "acp" | "api" | "shutdown" | "switch")
+        Ok("codex" | "codex-approval" | "approval-repeat" | "acp" | "api" | "shutdown" | "switch")
     ) {
         let input = composer.downgrade();
         let send = send.downgrade();
@@ -1329,7 +1346,7 @@ Puede solicitar permiso para leerlas.",
                         row.set_visible(true);
                     }
                     input.buffer().set_text(
-                        if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("codex-approval") {
+                        if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat")) {
                             "approval"
                         } else if matches!(
                             std::env::var("NEXUTERM_SMOKE_AI").as_deref(),

@@ -6,6 +6,7 @@ import sys
 assert sys.argv[1:] == ['app-server', '--listen', 'stdio://']
 account = not Path('unauthenticated').exists()
 turn = 0
+approval_index = 0
 
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -54,6 +55,7 @@ for line in sys.stdin:
         emit(dict(id=ident, result=dict(turn=dict(id=f'turn-{turn}'))))
         text = params['input'][0]['text']
         if text == 'approval':
+            approval_index = 1
             item = dict(type='commandExecution', id='tool', command='printf fixture', cwd=str(Path.cwd()), status='inProgress')
             notify('item/started', dict(item=item))
             emit(dict(id='approval-1', method='item/commandExecution/requestApproval', params=dict(itemId='tool', command='printf fixture', cwd=str(Path.cwd()))))
@@ -69,9 +71,14 @@ for line in sys.stdin:
         continue
     elif method == 'turn/interrupt':
         notify('turn/completed', dict(turn=dict(id=f'turn-{turn}', status='interrupted')))
-    elif method is None and ident == 'approval-1':
-        assert message['result']['decision'] == 'decline'
-        notify('turn/completed', dict(turn=dict(id=f'turn-{turn}', status='completed')))
+    elif method is None and isinstance(ident, str) and ident.startswith('approval-'):
+        assert message['result']['decision'] in ('decline', 'accept')
+        notify('serverRequest/resolved', dict(requestId=ident))
+        if Path('repeat-approval').exists() and approval_index < 2:
+            approval_index += 1
+            emit(dict(id=f'approval-{approval_index}', method='item/commandExecution/requestApproval', params=dict(itemId='tool', command='printf fixture', cwd=str(Path.cwd()))))
+        else:
+            notify('turn/completed', dict(turn=dict(id=f'turn-{turn}', status='completed')))
         continue
     if ident is not None:
         emit(dict(id=ident, result=result))

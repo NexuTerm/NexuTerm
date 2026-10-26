@@ -343,6 +343,24 @@ def check_opencode():
         print("PASS installed OpenCode: native MCP handshake, skill discovery, primary agent and subagent")
 
 
+def check_repeated_approvals(mode):
+    with tempfile.TemporaryDirectory(prefix="nexuterm-repeat-approval-") as directory:
+        directory = Path(directory)
+        cli = directory / "codex"
+        cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab/codex_fixture.py").read_text())
+        cli.chmod(0o700)
+        (directory / "repeat-approval").touch()
+        profile = dict(id=mode, name="Codex", kind="Codex", program=str(cli), directory=str(directory))
+        _, logs = run(mode, profile, directory)
+        assert "NEXUTERM_SMOKE_APPROVALS_FINISHED" in logs, logs
+        if mode == "approval-repeat":
+            assert logs.count("NEXUTERM_SMOKE_CODEX_APPROVAL_ACCEPTED") == 2, logs
+        trace = [json.loads(line) for line in (directory / "protocol.jsonl").read_text().splitlines()]
+        replies = [r for r in trace if isinstance(r.get("id"), str) and r["id"].startswith("approval-")]
+        assert len(replies) == 2 and all(r["result"]["decision"] == "accept" for r in replies)
+        print("PASS two approvals in same turn: " + mode)
+
+
 def check_logout():
     with tempfile.TemporaryDirectory(prefix="nexuterm-logout-gui-") as directory:
         directory = Path(directory)
@@ -375,6 +393,8 @@ def check_copilot_account():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    for mode in ("approval-repeat",):
+        check_repeated_approvals(mode)
     check_logout()
     check_copilot_account()
     check_usage()
