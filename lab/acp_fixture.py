@@ -37,7 +37,9 @@ for line in sys.stdin:
             continue
         if text == 'interrupt':
             continue
-        for delta in ('Respuesta ', 'ACP gráfica.'):
+        answer = Path('markdown-response').read_text() if Path('markdown-response').exists() else 'Respuesta ACP gráfica.'
+        middle = len(answer) // 2
+        for delta in (answer[:middle], answer[middle:]):
             emit(dict(jsonrpc='2.0', method='session/update', params=dict(sessionId='fixture-session', update=dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text=delta)))))
         complete(ident)
         continue

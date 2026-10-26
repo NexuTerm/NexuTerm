@@ -62,9 +62,11 @@ for line in sys.stdin:
             continue
         if text == 'interrupt':
             continue
-        for delta in ('Respuesta ', 'gráfica de Codex.'):
+        answer = Path('markdown-response').read_text() if Path('markdown-response').exists() else 'Respuesta gráfica de Codex.'
+        middle = len(answer) // 2
+        for delta in (answer[:middle], answer[middle:]):
             notify('item/agentMessage/delta', dict(itemId=f'message-{turn}', delta=delta))
-        notify('item/completed', dict(item=dict(type='agentMessage', id=f'message-{turn}', text='Respuesta gráfica de Codex.')))
+        notify('item/completed', dict(item=dict(type='agentMessage', id=f'message-{turn}', text=answer)))
         notify('thread/tokenUsage/updated',dict(tokenUsage=dict(last=dict(totalTokens=1024),modelContextWindow=4096)))
         notify('account/rateLimits/updated',dict(rateLimits=dict(primary=dict(usedPercent=25+turn,windowDurationMins=300),secondary=dict(usedPercent=60+turn,windowDurationMins=10080))))
         notify('turn/completed', dict(turn=dict(id=f'turn-{turn}', status='completed')))

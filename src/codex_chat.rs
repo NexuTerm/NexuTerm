@@ -58,7 +58,7 @@ impl UsageView {
     }
 }
 
-fn message(list: &gtk::Box, title: &str, content: &str, tool: bool) -> gtk::Label {
+fn message(list: &gtk::Box, title: &str, content: &str, tool: bool, copy_response: bool) -> gtk::Label {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("card");
     card.set_margin_top(4);
@@ -80,7 +80,24 @@ fn message(list: &gtk::Box, title: &str, content: &str, tool: bool) -> gtk::Labe
     if tool {
         text.add_css_class("monospace");
     }
-    card.append(&heading);
+    if copy_response {
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        heading.set_hexpand(true);
+        header.append(&heading);
+        let copy = icon_button("edit-copy-symbolic", "Copiar respuesta · Markdown original");
+        copy.set_widget_name("ai-copy-response");
+        copy.add_css_class("ai-copy-response");
+        copy.set_valign(gtk::Align::Center);
+        copy.set_margin_end(6);
+        let source = text.downgrade();
+        copy.connect_clicked(move |button| {
+            if let Some(source) = source.upgrade() { button.clipboard().set_text(&source.text()); }
+        });
+        header.append(&copy);
+        card.append(&header);
+    } else {
+        card.append(&heading);
+    }
     card.append(&text);
     list.append(&card);
     while list.observe_children().n_items() > 128 {
@@ -1042,12 +1059,13 @@ Puede solicitar permiso para leerlas.",
                                                     "Codex",
                                                     item["text"].as_str().unwrap_or(""),
                                                     false,
+                                                    true,
                                                 );
                                             } else if item["type"] == "userMessage"
                                                 && let Some(content) = item["content"].as_array() {
                                                     for text in content {
                                                         if let Some(text) = text["text"].as_str() {
-                                                            message(&list, "Tú", text, false);
+                                                            message(&list, "Tú", text, false, false);
                                                         }
                                                     }
                                                 }
@@ -1142,7 +1160,7 @@ Puede solicitar permiso para leerlas.",
                             }
                             let buffer = buffers
                                 .entry(item)
-                                .or_insert_with(|| message(&list, &agent_name, "", false));
+                                .or_insert_with(|| message(&list, &agent_name, "", false, true));
                             append(buffer, &text);
                         }
                         Event::Item(item) => {
@@ -1170,7 +1188,7 @@ Puede solicitar permiso para leerlas.",
                                 if !text.is_empty() {
                                     let b = buffers
                                         .entry(id.clone())
-                                        .or_insert_with(|| message(&list, &agent_name, "", false));
+                                        .or_insert_with(|| message(&list, &agent_name, "", false, true));
                                     b.set_text(&text.chars().take(65536).collect::<String>());
                                 }
                             } else if matches!(
@@ -1197,6 +1215,7 @@ Puede solicitar permiso para leerlas.",
                                         },
                                         "",
                                         true,
+                                        false,
                                     )
                                 });
                                 let text = tool_text(&item);
@@ -1239,6 +1258,21 @@ Puede solicitar permiso para leerlas.",
                             }
                         }
                         Event::Finished(status) => {
+                            #[cfg(debug_assertions)]
+                            if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("copy") && status == "completed" {
+                                let label = buffers.values().find(|label|label.text().starts_with("# Informe")).expect("Markdown response");
+                                let expected = label.text().to_string();
+                                let card = label.parent().unwrap();
+                                let header = card.first_child().unwrap();
+                                let copy = header.last_child().unwrap().downcast::<gtk::Button>().unwrap();
+                                assert_eq!(copy.widget_name().as_str(), "ai-copy-response");
+                                copy.emit_clicked();
+                                let clipboard = copy.clipboard();
+                                glib::spawn_future_local(async move {
+                                    assert_eq!(clipboard.read_text_future().await.unwrap().as_deref(), Some(expected.as_str()));
+                                    eprintln!("NEXUTERM_SMOKE_COPY_MARKDOWN_OK");
+                                });
+                            }
                             #[cfg(debug_assertions)]
                             if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("workspace") && status == "completed" {
                                 workspace_turns += 1;
@@ -1306,7 +1340,7 @@ Puede solicitar permiso para leerlas.",
                         }
                         Event::Error(error) => {
                             close_dialogs(&dialogs);
-                            message(&list, "Codex · error", &error, false);
+                            message(&list, "Codex · error", &error, false, false);
                             info.set_text(&error);
                         }
                         Event::Closed => {
@@ -1382,7 +1416,7 @@ Puede solicitar permiso para leerlas.",
         if client.send_in_directory(prompt,selected_model,selected_effort,directory) {
             if let Some(mode)=mode_weak.upgrade(){mode.set_sensitive(false);}
             paths.borrow_mut().clear();if let Some(chips)=chips.upgrade(){while let Some(child)=chips.first_child(){chips.remove(&child);}chips.set_visible(false);}
-            message(&list, "Tú", &if attached.is_empty(){text.clone()}else{format!("{text}\n\nContexto: {attached}")}, false);
+            message(&list, "Tú", &if attached.is_empty(){text.clone()}else{format!("{text}\n\nContexto: {attached}")}, false, false);
             b.set_text("");
             info.set_text("El agente está trabajando…");
         }
@@ -1406,7 +1440,7 @@ Puede solicitar permiso para leerlas.",
     #[cfg(debug_assertions)]
     if matches!(
         std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
-        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "workspace" | "acp" | "api" | "shutdown" | "switch")
+        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "workspace" | "copy" | "acp" | "api" | "shutdown" | "switch")
     ) {
         let input = composer.downgrade();
         let send = send.downgrade();

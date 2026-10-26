@@ -345,6 +345,20 @@ def check_opencode():
         print("PASS installed OpenCode: native MCP handshake, skill discovery, primary agent and subagent")
 
 
+def check_copy_markdown(kind):
+    with tempfile.TemporaryDirectory(prefix="nexuterm-copy-markdown-") as directory:
+        directory = Path(directory)
+        cli = directory / ("codex" if kind == "Codex" else "acp")
+        fixture = "codex_fixture.py" if kind == "Codex" else "acp_fixture.py"
+        cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab" / fixture).read_text())
+        cli.chmod(0o700)
+        (directory / "markdown-response").write_text("# Informe\n\n- **Resultado**\n\n```rust\nfn main() {}\n```\n")
+        profile = dict(id="copy-" + kind, name=kind, kind=kind, program=str(cli), directory=str(directory))
+        _, logs = run("copy", profile, directory)
+        assert "NEXUTERM_SMOKE_COPY_MARKDOWN_OK" in logs, logs
+        print("PASS copy response: " + kind + " streamed Markdown, list and fenced code preserved in clipboard")
+
+
 def check_terminal_workspace(kind):
     with tempfile.TemporaryDirectory(prefix="nexuterm-workspace-") as directory:
         directory = Path(directory)
@@ -427,6 +441,8 @@ def check_copilot_account():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_copy_markdown("Codex")
+    check_copy_markdown("Acp")
     check_terminal_workspace("Codex")
     check_terminal_workspace("Acp")
     for mode in ("approval-repeat", "approval-session", "approval-always"):

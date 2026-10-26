@@ -107,6 +107,9 @@ muestran los tokens de la última petición. Los datos no proporcionados figuran
 en el perfil ni escribirlos en los registros.
 
 **Ctrl+Intro** envía el mensaje y **Detener** cancela la respuesta del chat activo.
+Cada respuesta de la IA, incluidas las recuperadas del historial, ofrece un icono
+**Copiar respuesta** que conserva su texto Markdown original, listas y bloques de
+código. Copia el texto actualizado que se muestra, también durante el streaming.
 Ocultar la paleta conserva las conversaciones abiertas. El selector de agente superior
 cambia el agente del chat activo; para conservarlo y trabajar con otro, utiliza **+**.
 
