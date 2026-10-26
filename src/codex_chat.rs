@@ -492,6 +492,7 @@ pub(super) fn build(state: &Rc<State>, process: &Rc<ai_panel::Process>) -> Chat 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
+        .overlay_scrolling(false)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&list)
         .build();
@@ -1266,10 +1267,21 @@ Puede solicitar permiso para leerlas.",
                                 let header = card.first_child().unwrap();
                                 let copy = header.last_child().unwrap().downcast::<gtk::Button>().unwrap();
                                 assert_eq!(copy.widget_name().as_str(), "ai-copy-response");
-                                copy.emit_clicked();
-                                let clipboard = copy.clipboard();
+                                let scroll = copy.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
                                 glib::spawn_future_local(async move {
+                                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                                    assert!(scroll.vadjustment().upper() > scroll.vadjustment().page_size(), "Long response must require scrolling");
+                                    scroll.vadjustment().set_value(scroll.vadjustment().lower());
+                                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                                    let bounds = copy.compute_bounds(&scroll).unwrap();
+                                    let bar = scroll.vscrollbar().compute_bounds(&scroll).unwrap();
+                                    assert!(bounds.x() + bounds.width() <= bar.x(), "Scrollbar covers the copy button: copy={bounds:?}, bar={bar:?}, width={}", scroll.width());
+                                    let picked = scroll.pick((bounds.x()+bounds.width()/2.0) as f64, (bounds.y()+bounds.height()/2.0) as f64, gtk::PickFlags::DEFAULT).expect("Copy button must be visible");
+                                    assert!(picked == copy || picked.is_ancestor(&copy), "Copy button must receive pointer events");
+                                    copy.emit_clicked();
+                                    let clipboard = copy.clipboard();
                                     assert_eq!(clipboard.read_text_future().await.unwrap().as_deref(), Some(expected.as_str()));
+                                    eprintln!("NEXUTERM_SMOKE_COPY_SCROLL_OK");
                                     eprintln!("NEXUTERM_SMOKE_COPY_MARKDOWN_OK");
                                 });
                             }

@@ -352,10 +352,11 @@ def check_copy_markdown(kind):
         fixture = "codex_fixture.py" if kind == "Codex" else "acp_fixture.py"
         cli.write_text("#!" + shutil.which("python3") + "\n" + (ROOT / "lab" / fixture).read_text())
         cli.chmod(0o700)
-        (directory / "markdown-response").write_text("# Informe\n\n- **Resultado**\n\n```rust\nfn main() {}\n```\n")
+        (directory / "markdown-response").write_text("# Informe\n\n- **Resultado**\n\n```rust\nfn main() {}\n```\n" + "\n".join(f"- Línea {index}" for index in range(200)))
         profile = dict(id="copy-" + kind, name=kind, kind=kind, program=str(cli), directory=str(directory))
         _, logs = run("copy", profile, directory)
         assert "NEXUTERM_SMOKE_COPY_MARKDOWN_OK" in logs, logs
+        assert "NEXUTERM_SMOKE_COPY_SCROLL_OK" in logs, logs
         print("PASS copy response: " + kind + " streamed Markdown, list and fenced code preserved in clipboard")
 
 
