@@ -9,10 +9,13 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 type Dialogs = Rc<RefCell<HashMap<String, (glib::WeakRef<gtk::Window>, Rc<Cell<bool>>)>>>;
+#[derive(Clone)]
 pub(super) struct Chat {
     pub widget: gtk::Box,
     pub open: Rc<dyn Fn(AiAgent, bool)>,
+    pub close: Rc<dyn Fn()>,
     pub history: gtk::Box,
+    pub models: Rc<RefCell<Vec<Value>>>,
     pub login: gtk::Button,
 }
 fn message(list: &gtk::Box, title: &str, content: &str, tool: bool) -> gtk::Label {
@@ -752,6 +755,7 @@ Puede solicitar permiso para leerlas.",
                     send.upgrade(),
                     browser.upgrade(),
                 ) else {
+                    close_dialogs(&dialogs);
                     client.close();
                     return glib::ControlFlow::Break;
                 };
@@ -1113,6 +1117,7 @@ Puede solicitar permiso para leerlas.",
             });
         })
     };
+    let catalog = models.clone();
     let c = current.clone();
     let input = composer.downgrade();
     let list_weak = list.downgrade();
@@ -1220,7 +1225,14 @@ Puede solicitar permiso para leerlas.",
             glib::ControlFlow::Continue
         });
     }
+    let close: Rc<dyn Fn()> = Rc::new(move || {
+        generation.set(generation.get() + 1);
+        close_dialogs(&dialogs);
+        if let Some((_, client)) = current.borrow_mut().take() { client.close(); }
+    });
     Chat {
+        models: catalog,
+        close,
         widget,
         open,
         history,

@@ -135,6 +135,23 @@ def check_shutdown():
         thread.join(timeout=2)
 
 
+def check_new_chat():
+    with tempfile.TemporaryDirectory(prefix="nexuterm-new-chat-") as directory:
+        directory=Path(directory)
+        codex=directory/"codex"
+        codex.write_text("#!"+shutil.which("python3")+"\n"+(ROOT/"lab/codex_fixture.py").read_text());codex.chmod(0o700)
+        acp=directory/"acp"
+        acp.write_text("#!"+shutil.which("python3")+"\n"+(ROOT/"lab/acp_fixture.py").read_text());acp.chmod(0o700)
+        profiles=[dict(id="original-codex",name="Codex",kind="Codex",program=str(codex),directory=str(directory)),
+                  dict(id="second-copilot",name="GitHub Copilot",kind="Acp",program=str(acp),directory=str(directory),model="fixture/two",models=["fixture/one","fixture/two"])]
+        _,logs=run("new-chat",profiles[0],directory,profiles=profiles)
+        assert "NEXUTERM_SMOKE_NEW_CHAT_OK" in logs,logs
+        requests=[json.loads(line) for line in (directory/"acp-protocol.jsonl").read_text().splitlines()]
+        assert any(r.get("method")=="session/prompt" for r in requests)
+        assert any(r.get("method")=="session/set_config_option" and r["params"]["value"]=="fixture/two" for r in requests)
+        print("PASS new chat: choose agent/model, second response, original draft/client preserved, close independently")
+
+
 def check_local(switch=False):
     with tempfile.TemporaryDirectory(prefix="nexuterm-acp-gui-") as directory:
         directory=Path(directory)
@@ -317,6 +334,7 @@ def check_opencode():
 
 if __name__ == "__main__":
     ARTIFACTS.mkdir(exist_ok=True)
+    check_new_chat()
     check_local()
     check_local(switch=True)
     check_codex_login(True)
