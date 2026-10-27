@@ -2,6 +2,7 @@ mod askpass;
 mod desktop_view;
 mod file_browser;
 mod files;
+mod recovery_ui;
 mod syntax;
 mod ftp;
 mod ftp_legacy;

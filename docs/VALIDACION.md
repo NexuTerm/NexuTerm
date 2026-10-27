@@ -6,6 +6,76 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Vinculación de borradores SSH y guardado atómico — 27 de octubre de 2026
+
+- Los borradores nuevos conservan la huella SHA-256 del contenido original.
+  `Vincular a SSH` exige una conexión existente del mismo perfil y parámetros
+  configurados de destino, compara esa huella y no escribe en el original.
+  `Revalidar SSH` utiliza la huella actualizada tras el guardado. Los borradores
+  anteriores sin huella siguen recuperándose para comparación y copia local.
+- El guardado del editor remoto deja de utilizar SCP: SFTP publica un temporal
+  verificado mediante POSIX rename. Se conservan y comprueban propietario,
+  grupo y permisos; falta de soporte o errores de metadatos bloquean la escritura
+  directa. Se retiró el requisito de `scp` del comprobador de ejecución.
+- `cargo build --locked --offline --jobs 2`: correcto, sin advertencias.
+  `cargo test --locked --offline --jobs 2`: 67 pruebas correctas; cuatro
+  integraciones ignoradas por defecto.
+- `python3 lab/check_remote_editor.py`: integración real y cuatro recorridos GTK
+  correctos. Comprueba reemplazo del inodo, permisos, conflicto, destino distinto,
+  borrador antiguo sin huella, directorio sin permiso de creación, retirada de
+  temporales y conservación de la copia local. Se interrumpe SSH después de
+  observar una subida parcial de 8 MiB en el temporal: el destino publicado
+  permanece completo, sin contenido parcial.
+- Los recorridos GTK cubren edición normal en oscuro/claro, recuperación con
+  vinculación y guardado, revalidación y persistencia de la nueva huella, y
+  rechazo gráfico de un original modificado externamente. Captura de la
+  recuperación vinculada revisada visualmente.
+- `python3 lab/check_recovery.py`: ocho escenarios anteriores correctos, incluidos
+  SIGKILL, original ausente, descarte y bloqueo del cierre ante fallo de captura.
+  `python3 lab/check_workspaces.py`: cuatro escenarios correctos.
+  `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
+- Formato de los módulos de recuperación, backend remoto y su prueba de
+  integración y `git diff --check`: correctos. Clippy no está instalado en el
+  toolchain. No se generó un paquete de release ni se hicieron commits o push.
+- Límites: el reemplazo cambia el inodo y no garantiza ACL/atributos extendidos;
+  no bloquea a escritores externos entre la última comprobación y el renombrado.
+  La interrupción probada ocurre durante la subida, no durante un fallo de energía
+  o la confirmación del rename. No se ha probado un servidor que omita la extensión
+  POSIX rename; la ausencia se comprueba antes de crear el temporal.
+
+## Recuperación de documentos — 26 de octubre de 2026
+
+- `cargo build --locked --offline --jobs 2`: correcto, sin advertencias.
+  `cargo test --locked --offline --jobs 2`: 67 pruebas correctas y cuatro
+  integraciones ignoradas por defecto. Los casos nuevos cubren permisos,
+  persistencia, versiones y límites, borradores dañados, enlaces, invalidación
+  de escrituras obsoletas y exportación sin reemplazar archivos existentes.
+- `python3 lab/check_recovery.py`: ocho escenarios correctos con Xvfb y D-Bus,
+  HOME/XDG temporales y texto ficticio. Incluye SIGKILL del proceso GTK después
+  de la captura periódica, recuperación en otro proceso, guardado con etag y
+  retirada del borrador, conflicto con comparación visible, original ausente,
+  borrador remoto sin conexión, descarte confirmado, conservación de la última
+  edición antes de cerrar y bloqueo del cierre si el destino de recuperación
+  no puede utilizarse. La exportación se valida mediante el backend real; el
+  selector nativo de archivos no se automatiza en esta prueba.
+- El escenario GTK remoto utiliza un borrador sintético sin servidor ni perfil.
+  `python3 lab/check_remote_editor.py` añade la integración SSH/SCP real: verifica
+  que el origen remoto y el texto del borrador sobreviven a la eliminación de su
+  copia temporal. También pasan los recorridos gráficos oscuro/claro de edición
+  y guardado remoto. No se ha implementado la subida de borradores recuperados.
+- `python3 lab/check_local_explorer.py`: correctos los tres recorridos de editor
+  local y apertura externa. `python3 lab/check_workspaces.py`: cuatro escenarios
+  correctos. `python3 lab/check_ui.py menus`: correcto, ahora con datos XDG
+  aislados para no consultar borradores personales durante la prueba.
+- `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
+  Formato de `recovery.rs` y `recovery_ui.rs` y `git diff --check`: correctos.
+  Captura del editor recuperado revisada visualmente. Clippy sigue sin estar
+  disponible en el toolchain de esta máquina; no se generó un paquete de release.
+- Los cambios de espacios de trabajo previos permanecen en el árbol de trabajo.
+  No se han hecho nuevos commits ni push durante esta entrega. Se conservaron
+  ajustes simultáneos ajenos a la tarea en `src/style.css`.
+
+
 ## Whisper local instalado — 23 de octubre de 2026
 
 - Motor oficial whisper.cpp, etiqueta v1.9.5, commit

@@ -44,6 +44,68 @@ En **Preferencias** puedes elegir abrir los archivos del explorador con la aplic
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
 
+## Recuperación de documentos
+
+El editor conserva automáticamente los documentos modificados en
+`$XDG_DATA_HOME/nexuterm/recovery/` (por defecto
+`~/.local/share/nexuterm/recovery/`). Guarda el texto completo, con el límite
+habitual de 8 MiB, en archivos privados 0600 dentro de un directorio 0700,
+mediante reemplazo atómico y sincronización a disco. No añade credenciales de
+conexión al borrador ni envía su contenido a una IA o a un servidor.
+
+La captura se realiza cada segundo, con una única escritura en curso por
+editor. Una caída puede perder las ediciones posteriores a la última captura
+completada. Al cerrar normalmente, NexuTerm espera a conservar la última
+edición; si no puede escribir el borrador, mantiene la ventana abierta e informa
+del error. Cerrar la aplicación conserva los borradores. **Descartar** un
+editor los elimina expresamente, con confirmación.
+
+Al arrancar se ofrece una lista de documentos recuperables, también accesible en
+**Menú → Vista y herramientas → Recuperar documentos…**. Cerrar esta lista no
+borra nada. Los borradores dañados o con versión desconocida se conservan y se
+indica su número; no se intentan interpretar como documentos válidos.
+
+- **Recuperar** abre el texto como documento modificado sin sobrescribir nada.
+- En un documento local, **Guardar** solo se habilita si el original sigue siendo
+  un archivo regular con el mismo etag de la versión editada. El guardado vuelve
+  a comprobar ese etag. Si cambió o desapareció, conserva el borrador y ofrece
+  comparación o copia; no fuerza la sobrescritura.
+- **Comparar original** muestra ambos textos en columnas de solo lectura. Para
+  un original SSH requiere una terminal autenticada del mismo perfil y destino;
+  no conecta ni utiliza otra cuenta automáticamente.
+- **Guardar copia…** exporta a un archivo local nuevo, sin reemplazar destinos
+  existentes. Conserva el borrador y el estado modificado, porque el original
+  sigue pendiente de guardar o descartar.
+
+Los borradores SSH sobreviven a la pérdida de la copia temporal, la conexión o
+el perfil. Se recuperan sin conexión y permiten comparar o exportar una copia
+local. Para volver a guardar en el servidor, conecta una terminal SSH al mismo
+perfil y destino y pulsa **Vincular a SSH**. Se comprueba la huella SHA-256 del
+original capturada al editar; si cambió, no se vincula ni se sobrescribe.
+Vincular conserva el texto del editor y no escribe en el servidor. **Guardar**
+vuelve a comprobar el original antes del reemplazo atómico; **Revalidar SSH**
+permite utilizar otra conexión autenticada del mismo destino si es necesario.
+
+Los borradores de la entrega anterior que no contienen esa huella siguen
+recuperándose, pero no permiten vinculación: conservan comparación y copia local.
+Después de guardar, la huella se actualiza para recuperar ediciones posteriores.
+No se conecta a SSH ni se suben borradores automáticamente.
+
+Un guardado correcto del original retira su borrador si no quedan ediciones
+posteriores; estas se conservan en la siguiente captura. No hay caducidad ni
+borrado automático de borradores pendientes. Se conserva el límite de 8 MiB;
+el guardado remoto utiliza el reemplazo atómico SFTP descrito más abajo.
+
+```bash
+cargo build --locked
+python3 lab/check_recovery.py
+```
+
+La prueba usa Xvfb, D-Bus y datos temporales: incluye `SIGKILL` real, recuperación
+entre procesos, cambios externos, original ausente, borrador remoto sin conexión,
+descarte confirmado y bloqueo del cierre cuando falla el almacenamiento.
+
+
 ## Agentes de IA y chat
 
 El botón **Agentes de IA** de la cabecera, el menú o **Ctrl+Mayús+I** abre una
@@ -320,25 +382,39 @@ Al seleccionar una pestaña SSH, **Archivos remotos** sustituye a las conexiones
 
 Doble clic en un archivo remoto regular descarga una copia a una carpeta temporal
 privada (0700, archivo 0600) y abre el editor integrado. **Guardar** o **Ctrl+S**
-escribe la copia local y la sube mediante el cliente `scp` de OpenSSH, reutilizando
-el socket autenticado del terminal; no vuelve a pedir la contraseña ni modifica tu
-configuración SSH. Se requiere el cliente OpenSSH moderno (9 o posterior), con
-SFTP en el servidor, igual que el explorador. El nombre y el destino originales se
-conservan, y la pestaña identifica el servidor. La opción de aplicaciones externas
-del explorador local no se aplica al guardado remoto.
+escribe la copia local y utiliza SFTP sobre el socket OpenSSH autenticado del
+terminal; no vuelve a pedir la contraseña ni modifica tu configuración SSH.
+El nombre y destino originales se conservan y la pestaña identifica el servidor.
+La opción de aplicaciones externas del explorador local no afecta a este editor.
 
-Antes de sobrescribir se compara el contenido remoto con la versión descargada.
-Si hay cambios externos o desconexión se mantiene el documento modificado y se
-indica la ruta de la copia temporal para recuperar o comparar el texto. Tras una
-subida correcta se verifica el contenido del servidor y se actualiza la versión
-esperada para el siguiente guardado. Las transferencias normales de archivos
-siguen rechazando sobrescrituras. El editor rechaza binarios, enlaces simbólicos,
-texto que no sea UTF-8 y archivos mayores de 8 MiB.
+Antes de subir se compara el original con la versión descargada. Se crea una
+carpeta privada `.nexuterm-edit-<UUID>` junto al original y se escribe allí el
+contenido por bloques de 64 KiB. Se verifica el temporal, se conservan y comprueban
+propietario, grupo y permisos POSIX, y se vuelve a comparar el original antes de
+publicar mediante `posix-rename@openssh.com`. El servidor debe admitir esta
+extensión; si no la ofrece o no se pueden conservar los metadatos conocidos,
+se bloquea el guardado. No hay alternativa silenciosa de escritura directa.
+Se usa `fsync` del servidor si está disponible.
 
-SCP escribe sobre el archivo existente: una interrupción durante la transferencia
-puede dejarlo incompleto; conserva la copia local para recuperarlo. La comprobación
-previa detecta cambios desde la descarga, pero no bloquea a otros editores durante
-la subida. Cerrar y descartar el documento elimina su copia temporal.
+El reemplazo no trunca el original durante la subida. Tras publicarlo se verifica
+su contenido y se actualiza la huella para el siguiente guardado. Se intenta
+retirar el temporal; si una desconexión impide limpiarlo, el mensaje identifica
+su ruta y se conserva la copia local. Si se pierde la confirmación durante el
+reemplazo, el resultado se considera desconocido: comprueba el servidor antes de
+reintentar. Las transferencias normales del explorador mantienen sus límites y
+siguen rechazando sobrescrituras.
+
+La operación sustituye el inodo y no actualiza otros enlaces duros al original.
+SFTP v3 no permite garantizar la conservación de ACL, atributos extendidos u otros
+metadatos no informados; la interfaz lo indica antes de guardar. Para archivos
+que requieran esos metadatos, usa una herramienta que los preserve expresamente.
+La comprobación de contenido no bloquea otros clientes: sigue existiendo una
+ventana entre la última comprobación y el renombrado. No es un control de
+concurrencia con bloqueo ni una garantía frente a fallos de energía del servidor.
+
+El editor rechaza binarios, enlaces simbólicos, texto que no sea UTF-8 y archivos
+mayores de 8 MiB. Los borradores se conservan para recuperar, comparar o guardar
+una copia; descartar expresamente el documento retira también su borrador.
 
 ## Límites conocidos
 
@@ -377,9 +453,10 @@ aplicación MIME de prueba, incluyendo nombres con espacios y acentos. No cambia
 las aplicaciones predeterminadas del usuario.
 
 La prueba de edición remota crea un `sshd` desechable en loopback, claves propias
-y una carpeta privada temporal bajo HOME (para respetar StrictModes); verifica SCP
-real, permisos, conflictos, límites y el recorrido gráfico con resaltado. No usa
-servidores ni claves personales. Requiere `sshd`, `ssh-keygen`, `scp`, Xvfb y D-Bus.
+y una carpeta privada temporal bajo HOME (para respetar StrictModes); verifica SFTP
+real, reemplazo de inodo, permisos, conflictos, interrupción durante la subida y
+recuperación vinculada desde GTK. No usa servidores ni claves personales.
+Requiere `sshd`, `ssh-keygen`, `ssh`, Xvfb y D-Bus.
 
 Pruebas de biblioteca sin la interfaz GTK (el backend VNC requiere libvncclient):
 

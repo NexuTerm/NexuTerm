@@ -25,7 +25,7 @@ pub fn choose_editor(state: &Rc<State>, window: &gtk::ApplicationWindow) {
 }
 
 pub fn editor(state: &Rc<State>, window: &gtk::ApplicationWindow, file: gio::File) {
-    editor_document(state, window, file, None);
+    editor_document(state, window, file, None, None, None);
 }
 pub fn remote_editor(
     state: &Rc<State>,
@@ -37,14 +37,38 @@ pub fn remote_editor(
         window,
         gio::File::for_path(remote.local_path()),
         Some(remote),
+        None,
+        None,
     );
 }
-fn editor_document(
+pub(crate) fn existing_editor(state: &State, id: &str) -> Option<(gtk::Box, nexuterm::recovery::Source)> {
+    state.recoveries.borrow().iter().filter_map(std::rc::Weak::upgrade).filter(|tracker|tracker.id == id)
+        .find_map(|tracker| {
+            let root = tracker.root.upgrade()?;
+            (0..state.notebook.n_pages()).any(|i|state.notebook.nth_page(i).child() == root)
+                .then(||(root, tracker.source()))
+        })
+}
+pub fn recovered_editor(state: &Rc<State>, window: &gtk::ApplicationWindow, draft: nexuterm::recovery::Draft) {
+    if let Some((root, source)) = existing_editor(state, &draft.id) {
+        if source.same_document(&draft.source) { state.notebook.set_selected_page(&state.notebook.page(&root)); }
+        else { state.status.set_text("El identificador del borrador corresponde a otro origen; no se ha abierto otra copia."); }
+        return;
+    }
+    let file = match &draft.source {
+        nexuterm::recovery::Source::Local { path, .. } => gio::File::for_path(path),
+        _ => gio::File::for_path(draft.source.basename()),
+    };
+    editor_document(state, window, file, None, Some(draft), None);
+}
+pub(crate) fn editor_document(
     state: &Rc<State>,
     window: &gtk::ApplicationWindow,
     file: gio::File,
     remote: Option<std::sync::Arc<nexuterm::remote_edit::RemoteDocument>>,
-) {
+    recovered: Option<nexuterm::recovery::Draft>,
+    document_id: Option<String>,
+) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("nexuterm-section");
     root.add_css_class("modern-editor");
@@ -69,7 +93,37 @@ fn editor_document(
     }
     toolbar.append(&badge);
     toolbar.append(&save);
+    let save_copy = gtk::Button::with_label("Guardar copia…");
+    save_copy.set_sensitive(false);
+    toolbar.append(&save_copy);
+    let source = recovered.as_ref().map(|draft|draft.source.clone()).unwrap_or_else(|| {
+        remote.as_ref().map(|r|r.recovery_source()).unwrap_or_else(|| file.path().map(|path|nexuterm::recovery::Source::Local { path, etag: None })
+            .unwrap_or(nexuterm::recovery::Source::Detached { title: "Documento sin ruta local".into() }))
+    });
+    if recovered.is_some() {
+        badge.set_text("BORRADOR RECUPERADO");
+        badge.set_tooltip_text(Some(&source.title()));
+        let compare = gtk::Button::with_label("Comparar original");
+        toolbar.append(&compare);
+        let s = Rc::downgrade(state); let w = window.downgrade(); let origin = source.clone();
+        let b = root.downgrade();
+        compare.connect_clicked(move |_| {
+            if let (Some(state), Some(window), Some(root)) = (s.upgrade(), w.upgrade(), b.upgrade()) {
+                crate::recovery_ui::compare(&state, &window, &origin, &root);
+            }
+        });
+    }
     root.append(&toolbar);
+    let bind_remote = if recovered.is_some() && matches!(&source, nexuterm::recovery::Source::Remote { .. }) {
+        let button = gtk::Button::with_label("Vincular a SSH");
+        button.set_halign(gtk::Align::Start);
+        if !matches!(&source, nexuterm::recovery::Source::Remote { fingerprint: Some(_), .. }) {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some("Este borrador anterior no contiene la huella original. Compara o guarda una copia local."));
+        }
+        root.append(&button);
+        Some(button)
+    } else { None };
     root.append(&status);
     let text = gtk::TextView::builder()
         .monospace(true)
@@ -79,6 +133,8 @@ fn editor_document(
         .top_margin(12)
         .build();
     let buffer = text.buffer();
+    let recovery = crate::recovery_ui::Tracker::attach(state, &root, &buffer, &status, source.clone(), recovered.as_ref().map(|d|d.id.clone()).or(document_id));
+    crate::recovery_ui::bind_copy(&save_copy, window, &buffer, &status, source.basename());
     crate::syntax::bind(&buffer, file.basename().unwrap_or_default());
     state
         .documents
@@ -174,23 +230,75 @@ fn editor_document(
     if let Some(remote) = &remote {
         page.set_tooltip(&remote.remote_path().to_string_lossy());
     }
+    if recovered.is_some() { page.set_title(&format!("{title} · recuperado")); page.set_tooltip(&source.title()); }
     state.notebook.set_selected_page(&page);
     let target = page.downgrade();
+    let current_file = Rc::new(RefCell::new(file.clone()));
+    let current_remote = Rc::new(RefCell::new(remote));
+    if let Some(bind) = bind_remote {
+        let s = Rc::downgrade(state);
+        let remote = current_remote.clone(); let file = current_file.clone(); let tag = etag.clone();
+        let b = busy.clone(); let l = loaded.clone(); let st = status.downgrade(); let save = save.downgrade();
+        let recovery = recovery.clone(); let badge = badge.downgrade();
+        bind.connect_clicked(move |button| {
+            if b.get() || !l.get() { return; }
+            let Some(state) = s.upgrade() else { return; };
+            let origin = recovery.source();
+            let nexuterm::recovery::Source::Remote { profile_id, destination, .. } = &origin else { return; };
+            let Some(connection) = state.recovery_connection(profile_id, destination) else {
+                if let Some(status) = st.upgrade() { status.set_text("Conecta primero una terminal SSH al mismo perfil y destino. No se ha iniciado otra conexión."); }
+                return;
+            };
+            b.set(true); button.set_sensitive(false);
+            if let Some(save) = save.upgrade() { save.set_sensitive(false); }
+            if let Some(status) = st.upgrade() { status.set_text("Comprobando la versión original en la conexión SSH…"); }
+            let (origin, remote, file, tag, busy, status, save, recovery, badge, button) = (origin.clone(), remote.clone(), file.clone(), tag.clone(), b.clone(), st.clone(), save.clone(), recovery.clone(), badge.clone(), button.downgrade());
+            glib::spawn_future_local(async move {
+                let result = async {
+                    let document = nexuterm::runtime::runtime().spawn(async move { nexuterm::remote_edit::RemoteDocument::recover(connection, &origin).await }).await.map_err(|e|e.to_string())??;
+                    let local = gio::File::for_path(document.local_path());
+                    let info = local.query_info_future("etag::value", gio::FileQueryInfoFlags::NONE, PRIORITY).await.map_err(|e|e.to_string())?;
+                    let etag = info.etag().map(String::from).ok_or("La copia local no ofrece una versión segura de guardado")?;
+                    recovery.set_source(document.recovery_source());
+                    recovery.flush().await?;
+                    Ok::<_,String>((document, local, etag))
+                }.await;
+                match result {
+                    Ok((document, local, etag)) => {
+                        if let Some(badge) = badge.upgrade() { badge.set_text(&format!("SSH / {} · recuperado", document.host())); }
+                        *remote.borrow_mut() = Some(document); *file.borrow_mut() = local; *tag.borrow_mut() = Some(etag);
+                        if let Some(save) = save.upgrade() { save.set_sensitive(true); }
+                        if let Some(status) = status.upgrade() { status.set_text("Original vinculado y comprobado. Guardado atómico con permisos POSIX; ACL y atributos extendidos no garantizados."); }
+                        if let Some(button) = button.upgrade() { button.set_label("Revalidar SSH"); button.set_sensitive(true); }
+                    }
+                    Err(error) => {
+                        if let Some(status) = status.upgrade() { status.set_text(&format!("No se vinculó el borrador: {error}")); }
+                        if let Some(save) = save.upgrade() { save.set_sensitive(remote.borrow().is_some() && tag.borrow().is_some()); }
+                        if let Some(button) = button.upgrade() { button.set_sensitive(true); }
+                    }
+                }
+                busy.set(false);
+            });
+        });
+    }
     let close_button = close.clone();
-    state.notebook.connect_close_page(move |_, page| {
+    let close_handler = Rc::new(RefCell::new(None));
+    *close_handler.borrow_mut() = Some(state.notebook.connect_close_page(move |_, page| {
         if target.upgrade().as_ref() == Some(page) {
             close_button.emit_clicked();
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed
         }
-    });
+    }));
     let tab = root.downgrade();
     let nb = state.notebook.downgrade();
     let buf = buffer.downgrade();
     let w = window.downgrade();
     let b = busy.clone();
     let st = status.downgrade();
+    let close_recovery = recovery.clone();
+    let handler = close_handler.clone();
     close.connect_clicked(move |_| {
         if b.get() {
             if let Some(s) = st.upgrade() {
@@ -212,24 +320,35 @@ fn editor_document(
                 .default_button(0)
                 .build();
             let nb = nb.clone();
-            let tab = tab.clone();
+            let tab = tab.clone(); let recovery = close_recovery.clone(); let handler = handler.clone(); let status = st.clone();
             glib::spawn_future_local(async move {
                 if dialog.choose_future(Some(&window)).await == Ok(1) {
-                    remove_page(&nb, &tab);
+                    match recovery.discard().await {
+                        Ok(()) => remove_page(&nb, &tab, &handler),
+                        Err(error) => if let Some(status) = status.upgrade() { status.set_text(&format!("No se pudo descartar el borrador: {error}")); },
+                    }
                 }
             });
             return;
         }
-        remove_page(&nb, &tab);
+        let (nb, tab, recovery, handler, status) = (nb.clone(), tab.clone(), close_recovery.clone(), handler.clone(), st.clone());
+        glib::spawn_future_local(async move {
+            match recovery.discard().await {
+                Ok(()) => remove_page(&nb, &tab, &handler),
+                Err(error) => if let Some(status) = status.upgrade() { status.set_text(&format!("No se pudo cerrar el documento: {error}")); },
+            }
+        });
     });
-    let file_save = file.clone();
+    let file_save = current_file.clone();
+    let remote_save = current_remote.clone();
     let buf = buffer.downgrade();
     let tag = etag.clone();
     let b = busy.clone();
     let l = loaded.clone();
     let st = status.downgrade();
+    let save_recovery = recovery.clone();
     save.connect_clicked(move |button| {
-        if b.get() || !l.get() {
+        if b.get() || !l.get() || tag.borrow().is_none() {
             return;
         }
         let Some(buffer) = buf.upgrade() else {
@@ -246,17 +365,18 @@ fn editor_document(
         }
         b.set(true);
         button.set_sensitive(false);
-        let file = file_save.clone();
+        let file = file_save.borrow().clone();
         let expected = tag.borrow().clone();
         let tag = tag.clone();
         let busy = b.clone();
         let status = st.clone();
         let button = button.downgrade();
         let buffer = buffer.downgrade();
-        let remote = remote.clone();
+        let remote = remote_save.borrow().clone();
+        let recovery = save_recovery.clone();
         if let Some(status) = status.upgrade() {
             status.set_text(if remote.is_some() {
-                "Guardando copia temporal y subiendo por SCP…"
+                "Guardando mediante temporal SFTP y reemplazo atómico…"
             } else {
                 "Guardando…"
             });
@@ -294,12 +414,17 @@ fn editor_document(
                     {
                         buffer.set_modified(false);
                     }
+                    if let Some(remote) = &remote { recovery.set_source(remote.recovery_source()); }
+                    let recovery_result = recovery.saved(tag.borrow().clone()).await;
                     if let Some(status) = status.upgrade() {
                         status.set_text(if remote.is_some() {
-                            "Guardado por SCP y verificado en el servidor."
+                            "Guardado atómico SFTP y verificado en el servidor."
                         } else {
                             "Guardado con comprobación de versión."
                         });
+                    }
+                    if let Err(error) = recovery_result {
+                        if let Some(status) = status.upgrade() { status.set_text(&format!("Original guardado; no se pudo retirar el borrador: {error}")); }
                     }
                     #[cfg(debug_assertions)]
                     if remote.is_some()
@@ -314,7 +439,7 @@ fn editor_document(
                             .as_ref()
                             .map(|r| format!(" Copia local: {}", r.local_path().display()))
                             .unwrap_or_default();
-                        status.set_text(&format!("No se guardó: {error}.{copy}"));
+                        status.set_text(&format!("No se confirmó el guardado: {error}.{copy}"));
                     }
                 }
             }
@@ -348,10 +473,28 @@ fn editor_document(
     let view = text.downgrade();
     let save = save.downgrade();
     let status = status.downgrade();
+    let copy = save_copy.downgrade();
+    let recovery_loaded = recovery.clone();
+    let is_remote_origin = matches!(&source, nexuterm::recovery::Source::Remote { .. });
     #[cfg(debug_assertions)]
     let numbers = gutter.downgrade();
+    #[cfg(debug_assertions)]
+    let smoke_window = window.downgrade();
     glib::spawn_future_local(async move {
-        let result = read_text(&file).await;
+        let mut notice = None;
+        let is_recovered = recovered.is_some();
+        let result = if let Some(draft) = recovered {
+            let tag = match &draft.source {
+                nexuterm::recovery::Source::Local { etag: Some(expected), .. } => {
+                    match file.query_info_future("etag::value,standard::type", gio::FileQueryInfoFlags::NONE, PRIORITY).await {
+                        Ok(info) if info.file_type() == gio::FileType::Regular && info.etag().as_deref() == Some(expected.as_str()) => Some(expected.clone()),
+                        _ => { notice = Some("El original cambió o no está disponible. Compara las versiones o guarda una copia con otro nombre."); None }
+                    }
+                }
+                _ => { notice = Some("Borrador recuperado sin conexión al original. Puedes compararlo o guardar una copia local; no se subirá automáticamente."); None }
+            };
+            Ok((draft.text, tag))
+        } else { read_text(&file).await };
         if let (Some(buffer), Some(view), Some(save), Some(status)) = (
             buf.upgrade(),
             view.upgrade(),
@@ -361,7 +504,9 @@ fn editor_document(
             match result {
                 Ok((contents, tag)) => {
                     buffer.set_text(&contents);
-                    buffer.set_modified(false);
+                    buffer.set_modified(is_recovered);
+                    recovery_loaded.loaded(tag.clone());
+                    if let Some(copy) = copy.upgrade() { copy.set_sensitive(true); }
                     #[cfg(debug_assertions)]
                     if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
                         assert_eq!(contents, "primera línea\nsegunda línea\n");
@@ -376,7 +521,15 @@ fn editor_document(
                     save.set_sensitive(tag.is_some());
                     *etag.borrow_mut() = tag;
                     loaded.set(true);
-                    status.set_text(if etag.borrow().is_some(){"UTF-8 · guardado con comprobación de versión"}else{"El servidor no aporta versión/etag: edición disponible, guardado deshabilitado para evitar sobrescrituras."});
+                    status.set_text(if is_remote_origin && !is_recovered {
+                        "UTF-8 · SFTP atómico con propietario/grupo/permisos POSIX; ACL y atributos extendidos no garantizados."
+                    } else if etag.borrow().is_some() { "UTF-8 · guardado con comprobación de versión" }
+                    else { "El servidor no aporta versión/etag: edición disponible, guardado deshabilitado para evitar sobrescrituras." });
+                    if let Some(notice) = notice { status.set_text(notice); }
+                    #[cfg(debug_assertions)]
+                    if let Some(window) = smoke_window.upgrade() {
+                        crate::recovery_ui::smoke_loaded(&recovery_loaded, &buffer, &save, &window);
+                    }
                     #[cfg(debug_assertions)]
                     if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
                         assert_eq!(contents, "def value():\n    return 1\n");
@@ -396,9 +549,10 @@ fn editor_document(
             }
         }
     });
+    root
 }
 
-fn remove_page(nb: &glib::WeakRef<adw::TabView>, tab: &glib::WeakRef<gtk::Box>) {
+fn remove_page(nb: &glib::WeakRef<adw::TabView>, tab: &glib::WeakRef<gtk::Box>, handler: &RefCell<Option<glib::SignalHandlerId>>) {
     if let (Some(n), Some(t)) = (nb.upgrade(), tab.upgrade())
         && let Some(i) = n
             .pages()
@@ -406,11 +560,12 @@ fn remove_page(nb: &glib::WeakRef<adw::TabView>, tab: &glib::WeakRef<gtk::Box>) 
             .filter_map(Result::ok)
             .find(|p| p.child() == t)
     {
+        if let Some(handler) = handler.borrow_mut().take() { n.disconnect(handler); }
         n.close_page_finish(&i, true);
     }
 }
 
-async fn read_text(file: &gio::File) -> Result<(String, Option<String>), String> {
+pub(crate) async fn read_text(file: &gio::File) -> Result<(String, Option<String>), String> {
     let before = file
         .query_info_future("etag::value", gio::FileQueryInfoFlags::NONE, PRIORITY)
         .await

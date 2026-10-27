@@ -38,6 +38,10 @@ pub struct State {
     pub operations: RefCell<Vec<glib::WeakRef<gio::Cancellable>>>,
     pub desktops: RefCell<Vec<std::sync::Weak<nexuterm::desktop::Desktop>>>,
     pub sftp_masters: RefCell<Vec<std::sync::Weak<crate::sftp_session::Master>>>,
+    pub(crate) recoveries: RefCell<Vec<Weak<crate::recovery_ui::Tracker>>>,
+    pub(crate) recovery_manager: RefCell<glib::WeakRef<gtk::Window>>,
+    pub(crate) recovery_closing: Cell<bool>,
+    pub(crate) recovery_scanning: Cell<bool>,
 }
 
 struct Session {
@@ -71,6 +75,11 @@ use actions::install_actions;
 
 impl State {
     pub(crate) fn window(&self) -> Option<gtk::ApplicationWindow> { self.window.upgrade() }
+    pub(crate) fn recovery_connection(&self, profile_id: &str, destination: &str) -> Option<std::sync::Arc<nexuterm::ssh::SshConnection>> {
+        self.sessions.borrow().iter().filter_map(Weak::upgrade).filter_map(|s|s.connection.clone())
+            .find(|c| c.profile.id == profile_id && !c.closed.load(std::sync::atomic::Ordering::Relaxed)
+                && nexuterm::remote_edit::recovery_destination(&c.profile) == destination)
+    }
 }
 
 impl Session {
@@ -309,6 +318,10 @@ pub fn build(app: &gtk::Application) {
         operations: RefCell::new(Vec::new()),
         desktops: RefCell::new(Vec::new()),
         sftp_masters: RefCell::new(Vec::new()),
+        recoveries: RefCell::new(Vec::new()),
+        recovery_manager: RefCell::new(glib::WeakRef::new()),
+        recovery_closing: Cell::new(false),
+        recovery_scanning: Cell::new(false),
     });
     ai_panel::install(&state, &window, app, &ai_side);
     let ai_button = icon_button("system-users-symbolic", "Agentes de IA · Ctrl+Mayús+I");
@@ -386,7 +399,7 @@ pub fn build(app: &gtk::Application) {
             let dialog = gtk::AlertDialog::builder()
                 .modal(true)
                 .message("¿Cerrar NexuTerm?")
-                .detail("Se cerrarán las conexiones y agentes de IA activos y se perderán los cambios sin guardar.")
+                .detail("Se cerrarán las conexiones y agentes de IA activos. Los documentos modificados se conservarán como borradores de recuperación.")
                 .buttons(["Cancelar", "Cerrar"])
                 .cancel_button(0)
                 .default_button(0)
@@ -401,6 +414,7 @@ pub fn build(app: &gtk::Application) {
             });
             return glib::Propagation::Stop;
         }
+        if crate::recovery_ui::prepare_close(&s, w) { return glib::Propagation::Stop; }
         if let Some(process) = s.ai_process.borrow().as_ref() { process.shutdown(); }
         for h in s.sessions.borrow().iter().filter_map(Weak::upgrade) { h.stop(); }
         for master in s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade) { master.close(); }
@@ -446,8 +460,11 @@ pub fn build(app: &gtk::Application) {
         }
     });
     local_terminal(&state);
+    crate::recovery_ui::offer(&state, &window);
     #[cfg(debug_assertions)]
-    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+    if std::env::var_os("NEXUTERM_SMOKE_RECOVERY").is_some() { crate::recovery_ui::smoke_start(&state, &window); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some() {
         let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
         connect_profile(&state, &window, &Profile {
             id: "remote-editor-fixture".into(), name: "SSH editor fixture".into(), protocol: Protocol::Ssh,
@@ -713,6 +730,7 @@ pub fn build(app: &gtk::Application) {
         } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals"|"new-chat")) {
             10
         } else if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_BROWSER_FEATURES").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
             8
@@ -1093,7 +1111,7 @@ fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: 
         }
     }
     #[cfg(debug_assertions)]
-    if profile.id == "remote-editor-fixture" && std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+    if profile.id == "remote-editor-fixture" && (std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()) {
         let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
         spec.args.splice(0..0, ["-F".into(), "/dev/null".into(), "-o".into(),
             format!("UserKnownHostsFile={}", root.join("known_hosts").display()),

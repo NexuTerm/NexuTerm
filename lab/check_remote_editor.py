@@ -56,6 +56,8 @@ def main():
                 print("PASS atomic SFTP: repeated save, inode replacement, metadata, recovery baseline, wrong destination, conflict and cleanup", flush=True)
                 gui(base, env, "dark")
                 gui(base, env, "light")
+                gui_recovery(base, env, conflict=False)
+                gui_recovery(base, env, conflict=True)
             finally:
                 server.terminate()
                 server.wait(timeout=5)
@@ -81,6 +83,43 @@ def gui(base, env, theme):
     assert "NEXUTERM_SMOKE_SYNTAX_OK" in result.stderr, result.stderr
     assert remote.read_text() == "def value():\n    return 42  # editado desde NexuTerm\n"
     print(f"PASS GTK {theme}: remote file activation, private download, syntax colours, edit, Ctrl+S and atomic SFTP replacement")
+
+
+def gui_recovery(base, env, conflict):
+    mode = "restore-ssh-conflict" if conflict else "restore-ssh-save"
+    remote = base / "remote/recovered-ui.py"
+    original = "def value():\n    return 1\n"
+    changes = "def value():\n    return 84  # recuperado\n"
+    remote.write_text("def value():\n    return 99  # externo\n" if conflict else original)
+    destination = hashlib.sha256(json.dumps(["127.0.0.1", int(env["NEXUTERM_REMOTE_FIXTURE_PORT"]), env["NEXUTERM_REMOTE_FIXTURE_USER"]], separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    data = base / mode / "data"
+    directory = data / "nexuterm/recovery"
+    directory.mkdir(parents=True, mode=0o700)
+    identifier = str(uuid.uuid4())
+    draft = dict(version=1, id=identifier, source=dict(kind="Remote", profile_id="remote-editor-fixture", host="127.0.0.1", destination=destination, path=str(remote), fingerprint=hashlib.sha256(original.encode()).hexdigest()), text=changes)
+    path = directory / (identifier + ".json")
+    path.write_text(json.dumps(draft)); path.chmod(0o600)
+    config = base / mode / "config/nexuterm"
+    config.mkdir(parents=True)
+    (config / "sessions.json").write_text(json.dumps(dict(version=2, profiles=[])))
+    env = {k: v for k, v in env.items() if not k.startswith("NEXUTERM_SMOKE")}
+    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(data), GSK_RENDERER="cairo", GDK_BACKEND="x11", NEXUTERM_SMOKE_TEST="1", NEXUTERM_SMOKE_REMOTE_REBIND="1", NEXUTERM_SMOKE_RECOVERY=mode)
+    artifacts = ROOT / "artifacts"
+    env["NEXUTERM_SCREENSHOT"] = str(artifacts / (mode + ".png"))
+    result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], cwd=base, env=env, capture_output=True, text=True, timeout=25)
+    (artifacts / (mode + ".log")).write_text(result.stdout + result.stderr)
+    assert result.returncode == 0 and "CRITICAL" not in result.stderr, result.stderr
+    marker = "NEXUTERM_SMOKE_RECOVERY_REBIND_" + ("CONFLICT" if conflict else "SAVED") + "_OK"
+    assert marker in result.stderr, result.stderr
+    expected = "def value():\n    return 99  # externo\n" if conflict else changes
+    assert remote.read_text() == expected
+    stored = json.loads(path.read_text())
+    if not conflict:
+        assert stored["source"]["fingerprint"] == hashlib.sha256(changes.encode()).hexdigest()
+        assert stored["text"] == changes + "# siguiente edición\n"
+    else:
+        assert stored["text"] == changes
+    print("PASS GTK " + mode + ": explicit authenticated binding, guarded save and durable baseline")
 
 
 if __name__ == "__main__":

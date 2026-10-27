@@ -44,7 +44,8 @@ en grupos de 200 entradas y usa bloques de 64 KiB. El editor limita el texto a
 8 MiB y distingue el guardado local con etag del guardado remoto SFTP: temporal
 privado, verificación y reemplazo atómico cuando el servidor ofrece POSIX rename.
 Se conservan propietario/grupo/permisos POSIX, no se garantizan ACL ni atributos
-extendidos.
+extendidos. Los borradores recuperados requieren vinculación explícita al mismo
+destino y comparación de la huella original antes de habilitar Guardar.
 
 
 ## Configuración y credenciales

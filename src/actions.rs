@@ -60,6 +60,7 @@ pub(super) fn install_actions(
                 ("Mostrar explorador", "sidebar"),
                 ("Agentes de IA", "ai-agents"),
                 ("Abrir archivo…", "open-file"),
+                ("Recuperar documentos…", "recover-documents"),
                 ("Preferencias…", "preferences"),
                 ("Acerca de NexuTerm", "about"),
             ],
@@ -81,6 +82,7 @@ pub(super) fn install_actions(
         "new-connection",
         "new-terminal",
         "open-file",
+        "recover-documents",
         "remote-files",
         "search",
         "split-horizontal",
@@ -126,6 +128,7 @@ pub(super) fn install_actions(
                 "new-connection" => profile_dialog(&s, &w, None),
                 "new-terminal" => local_terminal(&s),
                 "open-file" => crate::files::choose_editor(&s, &w),
+                "recover-documents" => crate::recovery_ui::show(&s, &w),
                 "remote-files" => {
                     update_sidebar(&s);
                     s.sidebar_area.set_visible(true);
