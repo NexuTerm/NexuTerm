@@ -66,7 +66,7 @@ def gui(base, env, theme):
     config.mkdir(parents=True)
     (config / "sessions.json").write_text(json.dumps(dict(version=2, profiles=[], preferences=dict(theme=theme))))
     env = {k: v for k, v in env.items() if not k.startswith("NEXUTERM_SMOKE")}
-    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(base / "data"), GSK_RENDERER="cairo",
+    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(base / "data"), GSK_RENDERER="cairo", GDK_BACKEND="x11",
                NEXUTERM_SMOKE_TEST="1", NEXUTERM_SMOKE_REMOTE_EDITOR=str(remote), NEXUTERM_SMOKE_SYNTAX="1")
     artifacts = ROOT / "artifacts"
     artifacts.mkdir(exist_ok=True)

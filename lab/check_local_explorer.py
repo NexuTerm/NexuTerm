@@ -34,7 +34,7 @@ def check(theme, numbers=True, external=False):
         artifacts.mkdir(exist_ok=True)
         env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(base / "data"),
                    NEXUTERM_SMOKE_TEST="1", NEXUTERM_SMOKE_LOCAL_EXPLORER="1",
-                   NEXUTERM_SMOKE_FILE_BROWSER_LOCAL=str(local), GSK_RENDERER="cairo",
+                   NEXUTERM_SMOKE_FILE_BROWSER_LOCAL=str(local), GSK_RENDERER="cairo", GDK_BACKEND="x11",
                    NEXUTERM_SCREENSHOT=str(artifacts / f"{tag}.png"))
         if not numbers:
             env["NEXUTERM_SMOKE_NO_NUMBERS"] = "1"

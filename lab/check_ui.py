@@ -31,7 +31,7 @@ def main():
         protocols = [("Servidor de desarrollo", "Ssh", 22), ("Escritorio remoto", "Rdp", 3389), ("Pantalla de pruebas", "Vnc", 5900)]
         profiles = [dict(id=str(i), name=name, protocol=protocol, host="demo.example.invalid", port=port, username="demo", group="Laboratorio", favorite=i == 0) for i, (name, protocol, port) in enumerate(protocols)]
         (config / "sessions.json").write_text(json.dumps(dict(version=2, profiles=profiles, preferences=dict(theme=args.theme))))
-        env.update(XDG_CONFIG_HOME=directory, NEXUTERM_SMOKE_TEST="1", NEXUTERM_SCREENSHOT=str(screenshot), GSK_RENDERER="cairo", GDK_SCALE=str(args.scale))
+        env.update(XDG_CONFIG_HOME=directory, XDG_DATA_HOME=str(pathlib.Path(directory) / "data"), NEXUTERM_SMOKE_TEST="1", NEXUTERM_SCREENSHOT=str(screenshot), GSK_RENDERER="cairo", GDK_BACKEND="x11", GDK_SCALE=str(args.scale))
         if args.compact:
             env["NEXUTERM_SMOKE_COMPACT"] = "1"
         marker = "NEXUTERM_SMOKE_CHILD_EXIT=0"
