@@ -1,12 +1,14 @@
 //! Private local working copies for files edited through an authenticated SSH session.
 use crate::ssh::SshConnection;
 use bytes::BytesMut;
-use openssh_sftp_client::Sftp;
+use openssh_sftp_client::{
+    Sftp,
+    metadata::{MetaDataBuilder, Permissions},
+};
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::PermissionsExt;
 use std::{
     path::{Path, PathBuf},
-    process::Stdio,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -33,6 +35,20 @@ impl RemoteDocument {
     }
     pub fn host(&self) -> &str {
         &self.connection.profile.host
+    }
+    pub fn recovery_source(&self) -> crate::recovery::Source {
+        let profile = &self.connection.profile;
+        crate::recovery::Source::Remote {
+            profile_id: profile.id.clone(),
+            host: profile.host.clone(),
+            destination: recovery_destination(profile),
+            path: self.remote.clone(),
+            fingerprint: self
+                .fingerprint
+                .try_lock()
+                .ok()
+                .map(|hash| fingerprint_hex(&hash)),
+        }
     }
     pub async fn open(
         connection: Arc<SshConnection>,
@@ -74,7 +90,34 @@ impl RemoteDocument {
             fingerprint: Mutex::new(Sha256::digest(&contents).into()),
         }))
     }
-    /// The copy remains available for retry if SCP or conflict checking fails.
+    /// Rebind a recovery draft only to the same destination and original contents.
+    pub async fn recover(
+        connection: Arc<SshConnection>,
+        source: &crate::recovery::Source,
+    ) -> Result<Arc<Self>, String> {
+        let crate::recovery::Source::Remote {
+            profile_id,
+            destination,
+            path,
+            fingerprint: Some(expected),
+            ..
+        } = source
+        else {
+            return Err("El borrador no contiene la versión original necesaria para reanudar el guardado. Compara o guarda una copia.".into());
+        };
+        if connection.profile.id != *profile_id
+            || recovery_destination(&connection.profile) != *destination
+        {
+            return Err("El perfil SSH no corresponde al destino original del borrador".into());
+        }
+        let document = Self::open(connection, path.clone()).await?;
+        if fingerprint_hex(&*document.fingerprint.lock().await) != *expected {
+            return Err("Conflicto: el original remoto cambió desde la edición del borrador. No se ha vinculado ni sobrescrito.".into());
+        }
+        Ok(document)
+    }
+
+    /// Publish a verified sibling temporary through OpenSSH's atomic rename extension.
     pub async fn save(&self, contents: String) -> Result<(), String> {
         validate_text(contents.as_bytes())?;
         if self.connection.closed.load(Ordering::Relaxed) {
@@ -82,12 +125,35 @@ impl RemoteDocument {
         }
         let mut expected = self.fingerprint.lock().await;
         let channel = self.connection.sftp().await?;
+        let parent = self.remote.parent().ok_or("Archivo remoto sin carpeta")?;
+        let directory = parent.join(format!(".nexuterm-edit-{}", uuid::Uuid::new_v4()));
+        let temporary = directory.join("content");
+        let mut created = false;
         let operation = async {
-            let current = read(&channel.sftp, &self.remote).await?;
-            if <[u8; 32]>::from(Sha256::digest(&current)) != *expected {
-                return Err("Conflicto: el archivo remoto ha cambiado. No se ha sobrescrito; compara con tu copia temporal.".into());
+            let sftp = &channel.sftp;
+            if !sftp.support_posix_rename() {
+                return Err("El servidor no ofrece reemplazo atómico SFTP; no se ha sobrescrito el original. Guarda una copia.".into());
             }
-            // Read the exact local version being sent, not another concurrently edited copy.
+            let original = sftp
+                .fs()
+                .symlink_metadata(&self.remote)
+                .await
+                .map_err(|e| e.to_string())?;
+            let permissions = original
+                .permissions()
+                .ok_or("El servidor no informa de los permisos originales")?;
+            let uid = original
+                .uid()
+                .ok_or("El servidor no informa del propietario original")?;
+            let gid = original
+                .gid()
+                .ok_or("El servidor no informa del grupo original")?;
+            if <[u8; 32]>::from(Sha256::digest(read(sftp, &self.remote).await?)) != *expected {
+                return Err(
+                    "Conflicto: el archivo remoto ha cambiado. No se ha sobrescrito.".into(),
+                );
+            }
+            // Use the exact editor copy, preserving its existing size and version checks.
             let input = tokio::fs::File::open(&self.local)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -100,74 +166,146 @@ impl RemoteDocument {
             if local != contents.as_bytes() {
                 return Err("La copia temporal cambió antes de subirla".into());
             }
-            self.scp().await?;
-            let uploaded = read(&channel.sftp, &self.remote).await?;
+            drop(local);
+            sftp.fs()
+                .create_dir(&directory)
+                .await
+                .map_err(|e| e.to_string())?;
+            created = true;
+            // No data is written until the containing directory is private.
+            let mut private = Permissions::new();
+            private
+                .set_read_by_owner(true)
+                .set_write_by_owner(true)
+                .set_execute_by_owner(true);
+            sftp.fs()
+                .set_permissions(&directory, private)
+                .await
+                .map_err(|e| e.to_string())?;
+            if sftp
+                .fs()
+                .symlink_metadata(&directory)
+                .await
+                .map_err(|e| e.to_string())?
+                .permissions()
+                != Some(private)
+            {
+                return Err("No se pudo proteger el temporal remoto".into());
+            }
+            let mut output = sftp
+                .options()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .await
+                .map_err(|e| e.to_string())?;
+            let uploaded = async {
+                let mut file_private = Permissions::new();
+                file_private
+                    .set_read_by_owner(true)
+                    .set_write_by_owner(true);
+                output
+                    .set_permissions(file_private)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                for chunk in contents.as_bytes().chunks(64 * 1024) {
+                    output.write_all(chunk).await.map_err(|e| e.to_string())?;
+                }
+                if sftp.support_fsync() {
+                    output.sync_all().await.map_err(|e| e.to_string())?;
+                }
+                Ok::<(), String>(())
+            }
+            .await;
+            let closed = output.close().await.map_err(|e| e.to_string());
+            uploaded.and(closed)?;
+            if read(sftp, &temporary).await? != contents.as_bytes() {
+                return Err("El temporal remoto no coincide con el texto guardado".into());
+            }
+            sftp.fs()
+                .set_metadata(&temporary, MetaDataBuilder::new().id((uid, gid)).create())
+                .await
+                .map_err(|e| format!("No se pudo conservar propietario/grupo: {e}"))?;
+            sftp.fs()
+                .set_permissions(&temporary, permissions)
+                .await
+                .map_err(|e| format!("No se pudieron conservar los permisos: {e}"))?;
+            let replacement = sftp
+                .fs()
+                .symlink_metadata(&temporary)
+                .await
+                .map_err(|e| e.to_string())?;
+            if replacement.uid() != Some(uid)
+                || replacement.gid() != Some(gid)
+                || replacement.permissions() != Some(permissions)
+            {
+                return Err("El temporal no conserva los metadatos originales; no se ha sustituido el archivo".into());
+            }
+            let current = read(sftp, &self.remote).await?;
+            let metadata = sftp
+                .fs()
+                .symlink_metadata(&self.remote)
+                .await
+                .map_err(|e| e.to_string())?;
+            if <[u8; 32]>::from(Sha256::digest(&current)) != *expected
+                || metadata.permissions() != Some(permissions)
+                || metadata.uid() != Some(uid)
+                || metadata.gid() != Some(gid)
+            {
+                return Err(
+                    "Conflicto antes del reemplazo: el original cambió. No se ha sobrescrito."
+                        .into(),
+                );
+            }
+            drop(current);
+            sftp.fs()
+                .rename(&temporary, &self.remote)
+                .await
+                .map_err(|e| e.to_string())?;
+            let uploaded = read(sftp, &self.remote).await?;
             if uploaded != contents.as_bytes() {
-                return Err("La verificación remota no coincide con el texto guardado".into());
+                return Err("No se pudo verificar el archivo tras el reemplazo. Comprueba el servidor; se conserva el borrador.".into());
             }
             *expected = Sha256::digest(&uploaded).into();
             Ok(())
         };
-        let result = tokio::time::timeout(Duration::from_secs(90), operation)
-            .await
-            .map_err(|_| {
-                "Guardado remoto: tiempo agotado; se conserva la copia temporal".to_string()
+        let result = tokio::time::timeout(Duration::from_secs(90), operation).await
+            .map_err(|_|"Guardado remoto: tiempo agotado. No se ha confirmado el resultado; comprueba el original. Se conserva el borrador.".to_string()).and_then(|r|r);
+        let cleanup = if created {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let _ = channel.sftp.fs().remove_file(&temporary).await;
+                channel.sftp.fs().remove_dir(&directory).await
             })
-            .and_then(|r| r);
+            .await
+            .is_ok_and(|r| r.is_ok())
+        } else {
+            true
+        };
         let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+        if !cleanup {
+            return Err(format!(
+                "{} Puede quedar un temporal privado en {}. Se conserva la copia local.",
+                result.err().unwrap_or_else(|| {
+                    "Archivo reemplazado y verificado, pero no se pudo retirar el temporal.".into()
+                }),
+                directory.display()
+            ));
+        }
         result
     }
-    async fn scp(&self) -> Result<(), String> {
-        if self.connection.closed.load(Ordering::Relaxed) {
-            return Err("La sesión SSH está desconectada".into());
-        }
-        let profile = &self.connection.profile;
-        let host = if profile.host.contains(':') {
-            format!("[{}]", profile.host)
-        } else {
-            profile.host.clone()
-        };
-        let destination = format!(
-            "{}{}{}:{}",
-            profile.username,
-            if profile.username.is_empty() { "" } else { "@" },
-            host,
-            self.remote.to_str().ok_or("SCP requiere una ruta UTF-8")?
-        );
-        let status = tokio::process::Command::new("scp")
-            .args([
-                "-s",
-                "-B",
-                "-o",
-                "ControlMaster=no",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ProxyCommand=false",
-                "-o",
-            ])
-            .arg(format!(
-                "ControlPath={}",
-                self.connection.socket().display()
-            ))
-            .arg("-P")
-            .arg(profile.port.to_string())
-            .arg("--")
-            .arg(&self.local)
-            .arg(destination)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .status()
-            .await
-            .map_err(|e| format!("No se pudo ejecutar scp: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err("SCP no pudo guardar el archivo. Comprueba la conexión y los permisos; se conserva la copia temporal. El destino podría estar incompleto.".into())
-        }
-    }
+}
+fn fingerprint_hex(hash: &[u8; 32]) -> String {
+    hash.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn recovery_destination(profile: &crate::config::Profile) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(&profile.host, profile.port, &profile.username,))
+                .expect("serializable destination")
+        )
+    )
 }
 fn validate_text(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() > EDIT_LIMIT {

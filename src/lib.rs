@@ -26,3 +26,5 @@ pub mod ai_usage;
 
 #[cfg(feature = "gui")]
 pub mod approval_grants;
+
+pub mod recovery;

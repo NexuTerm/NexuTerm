@@ -41,9 +41,11 @@ RDP usa IronRDP y TLS del sistema; VNC enlaza LibVNCClient mediante un puente C.
 
 Las transferencias ordinarias rechazan sobrescrituras. SFTP pagina los listados
 en grupos de 200 entradas y usa bloques de 64 KiB. El editor limita el texto a
-8 MiB y distingue el guardado local con etag del guardado remoto mediante SCP,
-que compara contenido antes de subir y verifica el resultado después.
-Una interrupción durante SCP puede dejar incompleto el archivo remoto.
+8 MiB y distingue el guardado local con etag del guardado remoto SFTP: temporal
+privado, verificación y reemplazo atómico cuando el servidor ofrece POSIX rename.
+Se conservan propietario/grupo/permisos POSIX, no se garantizan ACL ni atributos
+extendidos.
+
 
 ## Configuración y credenciales
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Real SCP against a private loopback sshd; no user SSH settings or keys are used."""
+"""Atomic SFTP saves and draft recovery against a disposable loopback sshd."""
 import getpass
+import hashlib
+import uuid
 import json
 import os
 from pathlib import Path
@@ -51,7 +53,7 @@ def main():
                 cargo = shutil.which("cargo")
                 subprocess.run([cargo, "test", "--locked", "--test", "remote_edit", "--", "--ignored", "--test-threads=1"],
                                env=env, cwd=ROOT, check=True, timeout=120)
-                print("PASS real SCP: repeated save, Unicode/quotes/spaces, conflict, permissions, limits, symlink rejection, disconnect, temporary cleanup", flush=True)
+                print("PASS atomic SFTP: repeated save, inode replacement, metadata, recovery baseline, wrong destination, conflict and cleanup", flush=True)
                 gui(base, env, "dark")
                 gui(base, env, "light")
             finally:
@@ -78,7 +80,7 @@ def gui(base, env, theme):
     assert "NEXUTERM_SMOKE_REMOTE_SAVED_OK" in result.stderr, result.stderr
     assert "NEXUTERM_SMOKE_SYNTAX_OK" in result.stderr, result.stderr
     assert remote.read_text() == "def value():\n    return 42  # editado desde NexuTerm\n"
-    print(f"PASS GTK {theme}: remote file activation, private download, syntax colours, edit, Ctrl+S and real SCP overwrite")
+    print(f"PASS GTK {theme}: remote file activation, private download, syntax colours, edit, Ctrl+S and atomic SFTP replacement")
 
 
 if __name__ == "__main__":

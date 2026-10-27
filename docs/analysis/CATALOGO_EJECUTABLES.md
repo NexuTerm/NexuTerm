@@ -11,7 +11,7 @@ del proyecto; no certifica su instalación en el equipo actual.
 | GTK >= 4.10, libadwaita >= 1.4, VTE GTK4 >= 0.70 | Interfaz y terminal | Aplicación gráfica |
 | LibVNCClient | Backend VNC mediante enlace nativo | Compilación y ejecución |
 | OpenSSL/bibliotecas TLS del sistema | Transporte TLS | Compilación y ejecución |
-| OpenSSH: `ssh`, `scp` | Terminal, SFTP y edición remota | Conexiones SSH/SFTP |
+| OpenSSH: `ssh` | Terminal, SFTP y edición remota | Conexiones SSH/SFTP |
 | `telnet` | Terminal Telnet | Conexiones Telnet |
 | GVfs con backend FTP | Navegación y transferencias FTP | Conexiones FTP |
 | `curl` | Compatibilidad FTP Windows CE y peticiones API | Funciones correspondientes |
@@ -20,7 +20,7 @@ del proyecto; no certifica su instalación en el equipo actual.
 | `pw-record`, `whisper-cli` y modelo compatible | Dictado local | Opcional |
 | Python >= 3.11, `dpkg-dev`, `binutils` | Generación del paquete Debian | Empaquetado |
 | Python, Xvfb y D-Bus | Comprobaciones gráficas aisladas | Pruebas de laboratorio |
-| `sshd`, `ssh-keygen`, `scp` | Servidor y claves temporales | Pruebas de edición remota |
+| `sshd`, `ssh-keygen`, `ssh` | Servidor y claves temporales | Pruebas de edición remota |
 
 RDP utiliza IronRDP compilado en el programa. VNC utiliza LibVNCClient.
 No requieren instalar FreeRDP, Remmina ni un visor VNC externo.

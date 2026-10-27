@@ -7,7 +7,7 @@ use nexuterm::{
 use std::{path::PathBuf, process::Stdio, sync::atomic::Ordering};
 #[tokio::test]
 #[ignore = "requires lab/check_remote_editor.py and its disposable loopback SSH server"]
-async fn remote_editor_scp_roundtrip_conflict_and_limits() {
+async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     let root = PathBuf::from(
         std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").expect("Use lab/check_remote_editor.py"),
     );
@@ -130,6 +130,16 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
         .await
         .unwrap();
     let local = doc.local_path().to_path_buf();
+    // Recovery belongs to persistent app data, never to the SSH TempDir.
+    let draft = nexuterm::recovery::Draft {
+        version: 1,
+        id: uuid::Uuid::new_v4().to_string(),
+        source: doc.recovery_source(),
+        text: "Cambios remotos sin guardar\n".into(),
+    };
+    let journal = nexuterm::recovery::Journal::new(&root.join("recovery"), &draft.id).unwrap();
+    journal.advance(1);
+    assert!(journal.write(1, &draft).unwrap());
     assert_eq!(tokio::fs::read_to_string(&local).await.unwrap(), original);
     assert_eq!(
         std::fs::metadata(&local).unwrap().permissions().mode() & 0o777,
@@ -143,16 +153,34 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
             & 0o777,
         0o700
     );
+    let original_inode = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&remote).unwrap().ino()
+    };
     for value in [2, 3] {
         let text = format!("def value():\n    return {value}\n");
         tokio::fs::write(&local, &text).await.unwrap();
         doc.save(text.clone()).await.unwrap();
+        if value == 2 {
+            use std::os::unix::fs::MetadataExt;
+            assert_ne!(
+                std::fs::metadata(&remote).unwrap().ino(),
+                original_inode,
+                "Publish must replace the inode, not truncate it"
+            );
+        }
         assert_eq!(tokio::fs::read_to_string(&remote).await.unwrap(), text);
         assert_eq!(
             std::fs::metadata(&remote).unwrap().permissions().mode() & 0o777,
             0o640
         );
     }
+    assert!(!std::fs::read_dir(root.join("remote")).unwrap().any(|e| {
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".nexuterm-edit-")
+    }));
     tokio::fs::write(&remote, "def value():\n    return 9\n")
         .await
         .unwrap();
@@ -169,6 +197,11 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
             .contains("9")
     );
     drop(doc);
+    let recovered =
+        nexuterm::recovery::read(&root.join("recovery").join(format!("{}.json", draft.id)))
+            .unwrap();
+    assert_eq!(recovered.text, draft.text);
+    assert_eq!(recovered.source, draft.source);
     assert!(
         !local.exists(),
         "Private temporary copy must disappear when the document closes"
@@ -196,6 +229,90 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
             .await
             .is_err()
     );
+    let recovered_path = root.join("remote/recovered.py");
+    tokio::fs::write(&recovered_path, original).await.unwrap();
+    let first = RemoteDocument::open(connection.clone(), recovered_path.clone())
+        .await
+        .unwrap();
+    let origin = first.recovery_source();
+    let old_copy = first.local_path().to_path_buf();
+    drop(first);
+    assert!(!old_copy.exists());
+    let resumed = RemoteDocument::recover(connection.clone(), &origin)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::fs::read_to_string(&recovered_path).await.unwrap(),
+        original,
+        "Binding must not write to the original"
+    );
+    let changes = "def value():\n    return 100\n";
+    tokio::fs::write(resumed.local_path(), changes)
+        .await
+        .unwrap();
+    resumed.save(changes.into()).await.unwrap();
+    let updated = resumed.recovery_source();
+    assert_ne!(
+        updated, origin,
+        "A later draft must remember the newly saved baseline"
+    );
+    drop(resumed);
+    assert_eq!(
+        tokio::fs::read_to_string(&recovered_path).await.unwrap(),
+        changes
+    );
+    assert!(
+        RemoteDocument::recover(connection.clone(), &origin)
+            .await
+            .is_err(),
+        "Stale baseline must be refused"
+    );
+    let mut legacy = updated.clone();
+    if let nexuterm::recovery::Source::Remote { fingerprint, .. } = &mut legacy {
+        *fingerprint = None;
+    }
+    assert!(
+        RemoteDocument::recover(connection.clone(), &legacy)
+            .await
+            .is_err()
+    );
+    let mut wrong_target = updated.clone();
+    if let nexuterm::recovery::Source::Remote { destination, .. } = &mut wrong_target {
+        *destination = "0".repeat(64);
+    }
+    assert!(
+        RemoteDocument::recover(connection.clone(), &wrong_target)
+            .await
+            .is_err()
+    );
+    let readonly = root.join("remote/readonly");
+    tokio::fs::create_dir(&readonly).await.unwrap();
+    let protected = readonly.join("file.txt");
+    tokio::fs::write(&protected, "unchanged").await.unwrap();
+    let protected_doc = RemoteDocument::open(connection.clone(), protected.clone())
+        .await
+        .unwrap();
+    tokio::fs::write(protected_doc.local_path(), "must not overwrite")
+        .await
+        .unwrap();
+    tokio::fs::set_permissions(&readonly, std::fs::Permissions::from_mode(0o500))
+        .await
+        .unwrap();
+    let failed = protected_doc.save("must not overwrite".into()).await;
+    tokio::fs::set_permissions(&readonly, std::fs::Permissions::from_mode(0o700))
+        .await
+        .unwrap();
+    assert!(failed.is_err());
+    assert_eq!(
+        tokio::fs::read_to_string(&protected).await.unwrap(),
+        "unchanged"
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(protected_doc.local_path())
+            .await
+            .unwrap(),
+        "must not overwrite"
+    );
     let doc = RemoteDocument::open(connection.clone(), remote.clone())
         .await
         .unwrap();
@@ -207,5 +324,58 @@ async fn remote_editor_scp_roundtrip_conflict_and_limits() {
             .unwrap()
             .contains("9")
     );
+    // Interrupt a real upload after observing partial data in its private temporary.
+    connection.closed.store(false, Ordering::Relaxed);
+    let interrupted = root.join("remote/interrupted.txt");
+    tokio::fs::write(&interrupted, "original completo")
+        .await
+        .unwrap();
+    let interrupted_doc = RemoteDocument::open(connection.clone(), interrupted.clone())
+        .await
+        .unwrap();
+    let payload = "z".repeat(EDIT_LIMIT);
+    tokio::fs::write(interrupted_doc.local_path(), &payload)
+        .await
+        .unwrap();
+    let saving = interrupted_doc.clone();
+    let upload = tokio::spawn(async move { saving.save(payload).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let partial = std::fs::read_dir(root.join("remote"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".nexuterm-edit-")
+                })
+                .filter_map(|entry| std::fs::metadata(entry.path().join("content")).ok())
+                .any(|metadata| metadata.len() > 0 && metadata.len() < EDIT_LIMIT as u64);
+            if partial {
+                break;
+            }
+            assert!(
+                !upload.is_finished(),
+                "Upload completed before interruption could be exercised"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("Expected a partial temporary upload");
     master.kill().await.unwrap();
+    assert!(upload.await.unwrap().is_err());
+    let original_after = tokio::fs::read_to_string(&interrupted).await.unwrap();
+    assert!(
+        original_after == "original completo" || original_after == "z".repeat(EDIT_LIMIT),
+        "The published path must never contain partial data"
+    );
+    assert_eq!(
+        tokio::fs::metadata(interrupted_doc.local_path())
+            .await
+            .unwrap()
+            .len(),
+        EDIT_LIMIT as u64
+    );
 }

@@ -12,7 +12,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 CLIENTS = (
     ("SSH/SFTP", ("ssh",), "openssh-client"),
-    ("Edición remota SCP", ("scp",), "openssh-client"),
     ("Telnet", ("telnet",), "inetutils-telnet"),
     ("FTP Windows CE", ("curl",), "curl"),
 )

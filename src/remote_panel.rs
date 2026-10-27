@@ -666,7 +666,7 @@ impl Panel {
                     {
                         panel
                             .status
-                            .set_text("Copia temporal abierta; Guardar vuelve a subirla por SCP.");
+                            .set_text("Copia temporal abierta; Guardar publica un reemplazo atómico SFTP.");
                         crate::files::remote_editor(&state, &window, document);
                     }
                 }
