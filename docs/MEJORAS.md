@@ -23,9 +23,36 @@ Pendiente para cerrar la fase de espacios:
   adjuntos pendientes y estado visual del chat. La copia visible y la
   referencia nativa de Codex ya se integran en los espacios.
 - Integración de pestañas FTP/SFTP y escritorios remotos, panel enfocado,
-  estado visual restante y recuperación automática de estructura.
+  estado visual restante. La estructura compatible ya se conserva automáticamente.
 - Verificación específica de reconexión SSH restaurada contra el laboratorio;
   la prueba gráfica inicial de espacios utiliza terminales locales.
+
+## Recuperación automática de sesión
+
+Implementado: captura periódica de la estructura compatible, documentos y copia
+visible de los chats, sin depender de un espacio guardado manualmente. Conserva
+primero los borradores, evita reescribir estados sin cambios y serializa las
+escrituras por ventana en segundo plano. El cierre normal fuerza la última copia
+y trata explícitamente los errores. Cada ventana utiliza su propia identidad y
+bloqueo; las sesiones activas no aparecen como recuperables en otras ventanas.
+
+Se ofrece recuperación al arrancar y desde el menú. Recuperar añade el trabajo
+sin ejecutar terminales ni agentes, y solo retira la copia anterior después de
+confirmar el reemplazo duradero. Los fallos permiten reintentar sin duplicar las
+pestañas ya restauradas. El descarte es explícito y no borra originales ni
+borradores. Se conservan los registros dañados y los espacios con nombre siguen
+siendo independientes. Límite inicial: 32 copias de 16 MiB, sin expulsión automática.
+
+Pendiente: los tipos de pestaña y estados visuales aún no compatibles, historial
+completo de chats y reanudación API/ACP. Una caída puede perder los cambios desde
+la última captura completada; las escrituras o transferencias en curso posponen
+la siguiente captura. No se vuelven a ejecutar operaciones al recuperar.
+
+Prueba: `python3 lab/check_session_recovery.py`, con datos privados y SIGKILL real,
+dos capturas sucesivas sin guardar un espacio, restauración al arrancar, fallo y
+reintento de reemplazo, cierre normal, errores de almacenamiento, descarte y
+registros dañados. Las pruebas de backend cubren bloqueo, separación entre
+ventanas, permisos, retirada, límite de copias y preservación ante errores.
 
 ## Chats asociados al espacio
 

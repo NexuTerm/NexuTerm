@@ -6,6 +6,50 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Recuperación automática de sesión — 27 de octubre de 2026
+
+- Copia independiente por ventana cada dos segundos, cuando no hay otra captura
+  o escritura/transferencia en curso. Conserva borradores antes de publicar la
+  estructura compatible, selección, rutas y mensajes visibles/borradores de chat.
+  No modifica espacios guardados con nombre ni requiere guardarlos manualmente.
+- Archivo privado 0600 y directorio 0700, reemplazo atómico, sincronización y
+  bloqueo auxiliar estable ante el reemplazo. Las ventanas activas se excluyen
+  del listado; se conserva el checkpoint tras cerrar normalmente. El cierre
+  fuerza una última escritura y, ante error, permite cancelar o cerrar sin
+  actualizar la copia. Los formatos dañados o desconocidos no se sobrescriben.
+- Recuperación al arrancar o desde el menú. Añade estructuras desconectadas,
+  sin ejecutar terminales, agentes o turnos. La copia anterior solo se retira
+  después del reemplazo duradero; un reintento no duplica lo restaurado. El
+  descarte pide confirmación y no borra documentos ni borradores. Se limitan las
+  copias pendientes a 32 sin expulsar automáticamente datos anteriores.
+- `cargo build --locked --jobs 2`: ejecutable de depuración compilado.
+  `cargo test --locked --jobs 2`: **73 pruebas aprobadas**, cuatro integraciones
+  de laboratorio omitidas por defecto. Tres pruebas nuevas cubren permisos,
+  publicación y bloqueo, separación de ventanas, corrupción/enlaces simbólicos,
+  retirada sin resurrección y capacidad sin eliminación de copias anteriores.
+- `python3 lab/check_session_recovery.py`: seis procesos GTK aislados y cuatro
+  grupos de comprobaciones aprobados. Incluyen dos capturas periódicas sucesivas
+  sin guardar espacio, SIGKILL real, oferta al arrancar, documento y chat con la
+  última edición, divisiones y selección, ausencia de conexiones nuevas, fallo
+  de almacenamiento durante el relevo y reintento sin duplicados, sustitución
+  duradera antes de retirar la copia anterior y descarte confirmado. También
+  cierre antes del primer intervalo, cancelación de cierre ante fallo, recuperación
+  tras corregir el almacén y preservación de un formato dañado.
+- Regresiones aprobadas: cuatro escenarios de chats de espacios, siete de
+  documentos asociados a espacios, ocho de borradores y cuatro de espacios de
+  terminales; recorrido de menús a 1280 px. Los scripts usan Xvfb/X11, D-Bus y
+  HOME/XDG temporales, sin servicios reales ni cambios de originales.
+- Revisión visual del documento y chat recuperados. Se corrigió la vista vacía
+  del chat que aún aparecía sobre mensajes recuperados sin cliente conectado,
+  y se oculta el historial del proveedor hasta conectar; la prueba automática
+  comprueba que la vista vacía quede oculta. Formato de módulos nuevos, sintaxis
+  Python y `git diff --check` correctos. Sin dependencias nuevas, commit ni push.
+- Límites: persiste la estructura compatible y la copia visible de chats, no
+  historial ilimitado, API/ACP reanudables, adjuntos, foco/zoom/scrollback ni pestañas
+  FTP/SFTP/RDP/VNC. Una caída puede perder las ediciones posteriores a la última
+  captura completada. No se acreditan reanudaciones con una cuenta real ni se ha
+  generado un nuevo paquete de distribución.
+
 ## Chats asociados a espacios — 27 de octubre de 2026
 
 - Integración en la paleta independiente de IA: identidad, agente referenciado,

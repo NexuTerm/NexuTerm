@@ -42,6 +42,7 @@ pub(super) fn install_actions(
             vec![
                 ("Administrar sesiones…", "sessions"),
                 ("Espacios de trabajo…", "workspaces"),
+                ("Recuperar sesión anterior…", "recover-session"),
             ],
         ),
         (
@@ -81,6 +82,7 @@ pub(super) fn install_actions(
         "local-files",
         "sessions",
         "workspaces",
+        "recover-session",
         "new-connection",
         "new-terminal",
         "open-file",
@@ -128,6 +130,7 @@ pub(super) fn install_actions(
                 }
                 "sessions" => sessions::show(&s, &w),
                 "workspaces" => workspace_ui::show(&s, &w),
+                "recover-session" => session_ui::show(&s,&w,false),
                 "new-connection" => profile_dialog(&s, &w, None),
                 "new-terminal" => local_terminal(&s),
                 "open-file" => crate::files::choose_editor(&s, &w),

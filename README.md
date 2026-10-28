@@ -118,13 +118,64 @@ No se guardan claves, permisos concedidos, procesos ni solicitudes de aprobació
 Esta entrega conserva hasta los 128 mensajes visibles por chat y el borrador del
 editor; no es un archivo de todo el historial del proveedor. Los archivos adjuntos
 pendientes, el razonamiento seleccionado y el desplazamiento no se restauran.
-Los chats quedan incluidos en el JSON privado del espacio al guardarlo; la captura automática de sesión sigue pendiente. Se mantienen los límites de ocho chats,
+Los chats quedan incluidos en el JSON privado del espacio al guardarlo y en la
+copia automática de la sesión. Se mantienen los límites de ocho chats,
 64 KiB de borrador por chat y 16 MiB para el archivo completo; si se exceden se
 rechaza el guardado y se conserva el archivo anterior.
 
 Las pestañas de exploración FTP/SFTP y escritorio remoto siguen pendientes de
 integración, así como scrollback, zoom y panel enfocado. Los siguientes pasos están en
 [la hoja de ruta](docs/MEJORAS.md).
+
+## Recuperación automática de la sesión
+
+NexuTerm conserva una copia por ventana de las pestañas y divisiones compatibles,
+los documentos y sus referencias a borradores, la selección, las carpetas, la
+visibilidad de los laterales y los mensajes visibles y borradores de los chats.
+No hace falta guardar antes un espacio con nombre. Cada dos segundos, si no hay
+otra captura ni una escritura o transferencia en curso, conserva los borradores
+y actualiza la copia cuando el estado cambia. El trabajo de disco se realiza en
+segundo plano, con una sola escritura de sesión por ventana.
+
+Al arrancar se ofrecen las sesiones anteriores. También están en **Menú →
+Conexiones → Recuperar sesión anterior…**. **Recuperar** añade el trabajo sin
+cerrar las pestañas actuales: las terminales esperan una acción explícita y los
+chats se abren sin conectar al agente ni transmitir contenido. Se aplican los
+mismos límites y comprobaciones que al abrir un espacio. La copia anterior solo
+se retira después de conservar el estado recuperado en la copia de la ventana
+actual. **Descartar copia** pide confirmación y no borra originales ni borradores
+de documentos. Las copias dañadas o desconocidas se conservan sin modificar.
+
+Las copias están en `$XDG_DATA_HOME/nexuterm/workspaces/sessions/` (por defecto
+`~/.local/share/nexuterm/workspaces/sessions/`), separadas de los espacios con
+nombre. Se usan directorios 0700, archivos 0600, reemplazo atómico y un bloqueo
+por ventana; una sesión activa no se ofrece a otra instancia. Se conservan como
+máximo 32 copias pendientes, con un límite de 16 MiB por copia. Al alcanzar el
+límite se avisa y no se eliminan copias antiguas automáticamente: recupera o
+descarta alguna para permitir nuevas capturas.
+
+El cierre normal fuerza una última copia, incluso antes del primer intervalo.
+Si falla, puedes cancelar el cierre o cerrar expresamente sin actualizarla; los
+borradores ya conservados permanecen. Un corte puede perder cambios posteriores
+a la última captura completada, y las capturas se posponen mientras haya una
+escritura o transferencia. No se restauran procesos, comandos ejecutados,
+aprobaciones, transferencias ni túneles; tampoco los tipos de pestaña y estados
+visuales que siguen pendientes. Se conserva la última copia también tras un
+cierre normal, para poder recuperar el trabajo en el siguiente arranque.
+
+Prueba aislada de persistencia y restauración entre procesos:
+
+```bash
+cargo build --locked
+python3 lab/check_workspaces.py
+python3 lab/check_workspace_documents.py
+python3 lab/check_workspace_chats.py
+python3 lab/check_session_recovery.py
+```
+
+Requiere Xvfb y D-Bus y utiliza exclusivamente configuración y datos temporales.
+Estos scripts fijan X11 para utilizar Xvfb aunque la sesión del escritorio tenga
+Wayland; no cambian la configuración de la aplicación normal.
 
 ## Recuperación de documentos
 

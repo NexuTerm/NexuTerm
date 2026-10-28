@@ -64,6 +64,18 @@ explícita de reanudación usa esa referencia y bloquea el envío hasta recibir
 `Resumed`; la copia local permanece si el proveedor falla. API/ACP no reanudan
 contexto en esta entrega. No se serializan concesiones ni peticiones de aprobación.
 
+La recuperación automática reutiliza el esquema de espacios en un almacén
+separado, `workspaces/sessions/<UUID>.json`. `session_recovery` administra copias
+privadas y atómicas y bloqueos `flock` sobre archivos auxiliares estables ante el
+reemplazo del JSON. Cada ventana mantiene una identidad y un bloqueo mientras
+está abierta. El lector omite sesiones bloqueadas y conserva formatos inválidos.
+`session_ui` captura cada dos segundos, conserva antes los borradores y ejecuta
+el I/O en workers. Solo hay una escritura en curso por ventana y se omiten
+estados sin cambios. El cierre y el relevo de una copia recuperada fuerzan una
+escritura; la copia anterior solo se retira después de confirmar la nueva.
+La restauración añade estructuras desconectadas, con el mismo comportamiento
+seguro del gestor de espacios. Los espacios con nombre no se modifican.
+
 ## Configuración y credenciales
 
 La configuración se guarda en `$XDG_CONFIG_HOME/nexuterm/sessions.json`, con

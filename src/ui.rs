@@ -12,6 +12,7 @@ use std::{
 use vte4::prelude::*;
 
 pub struct State {
+    session_recovery: RefCell<Option<Rc<session_ui::Controller>>>,
     ai_workspace: RefCell<Option<ai_panel::WorkspaceChats>>,
     ai_process: RefCell<Option<Rc<ai_panel::Process>>>,
     ai_keys: RefCell<std::collections::HashMap<(String, String), zeroize::Zeroizing<String>>>,
@@ -63,6 +64,8 @@ struct Session {
 
 #[path = "actions.rs"]
 mod actions;
+#[path = "session_ui.rs"]
+mod session_ui;
 #[path = "workspace_ui.rs"]
 mod workspace_ui;
 #[path="ai_terminals.rs"]
@@ -299,6 +302,7 @@ pub fn build(app: &gtk::Application) {
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        session_recovery: RefCell::new(None),
         ai_workspace: RefCell::new(None),
         ai_process: RefCell::new(None),
         ai_keys: RefCell::new(std::collections::HashMap::new()),
@@ -427,6 +431,7 @@ pub fn build(app: &gtk::Application) {
             return glib::Propagation::Stop;
         }
         if crate::recovery_ui::prepare_close(&s, w) { return glib::Propagation::Stop; }
+        if session_ui::prepare_close(&s,w) { return glib::Propagation::Stop; }
         if let Some(process) = s.ai_process.borrow().as_ref() { process.shutdown(); }
         for h in s.sessions.borrow().iter().filter_map(Weak::upgrade) { h.stop(); }
         for master in s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade) { master.close(); }
@@ -472,7 +477,13 @@ pub fn build(app: &gtk::Application) {
         }
     });
     local_terminal(&state);
-    crate::recovery_ui::offer(&state, &window);
+    if !cfg!(debug_assertions) || std::env::var_os("NEXUTERM_SMOKE_TEST").is_none() || std::env::var_os("NEXUTERM_SMOKE_SESSION").is_some() {
+        session_ui::start(&state,&window);
+    } else {
+        crate::recovery_ui::offer(&state, &window);
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_SESSION").is_some() { session_ui::smoke(&state,&window); }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_RECOVERY").is_some() { crate::recovery_ui::smoke_start(&state, &window); }
     #[cfg(debug_assertions)]
@@ -751,6 +762,8 @@ pub fn build(app: &gtk::Application) {
             20
         } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals"|"new-chat")) {
             10
+        } else if std::env::var_os("NEXUTERM_SMOKE_SESSION").is_some() {
+            12
         } else if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_CHATS").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()

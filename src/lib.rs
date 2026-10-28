@@ -11,6 +11,8 @@ pub mod codex;
 pub mod ai;
 pub mod ai_config;
 pub mod config;
+pub mod workspaces;
+pub mod recovery;
 pub mod connection;
 pub mod desktop;
 pub mod monitor;
@@ -27,5 +29,5 @@ pub mod ai_usage;
 #[cfg(feature = "gui")]
 pub mod approval_grants;
 
-pub mod recovery;
-pub mod workspaces;
+#[cfg(feature = "gui")]
+pub mod session_recovery;
