@@ -145,6 +145,7 @@ def check_usage():
         profile=dict(id="usage",name="Codex",kind="Codex",program=str(codex),directory=str(directory))
         _,logs=run("usage",profile,directory)
         assert "NEXUTERM_SMOKE_USAGE_OK" in logs,logs
+        assert "NEXUTERM_SMOKE_COMPACT_FOOTER_OK" in logs,logs
         print("PASS usage: account name, 5-hour remaining 75%, weekly remaining 40% from provider")
 
 

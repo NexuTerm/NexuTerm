@@ -53,7 +53,6 @@ fn conversation(state: &Rc<State>, process: Rc<Process>) -> Rc<Conversation> {
     let chat = super::codex_chat::build(state, &process);
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     page.append(&chat.widget);
-    page.append(&chat.login);
     Rc::new(Conversation {
         id: uuid::Uuid::new_v4().to_string(),
         page,
@@ -868,6 +867,15 @@ pub(super) fn install(
                         .downcast::<gtk::Label>()
                         .unwrap();
                     assert!(account.text().contains("fixture@example.invalid"));
+                    assert_eq!(quota.parent(),account.parent());
+                    assert!(!quota.wraps() && !account.wraps());
+                    let context=find_named(chat.page.upcast_ref(),"ai-context").unwrap().downcast::<gtk::Label>().unwrap();
+                    let tokens=find_named(chat.page.upcast_ref(),"ai-tokens").unwrap().downcast::<gtk::Label>().unwrap();
+                    let status=find_named(chat.page.upcast_ref(),"ai-status").unwrap().downcast::<gtk::Label>().unwrap();
+                    assert_eq!(context.parent(),tokens.parent());assert_eq!(tokens.parent(),status.parent());
+                    assert!(!context.wraps() && !tokens.wraps() && !status.wraps());
+                    assert!(find_named(chat.page.upcast_ref(),"ai-logout").unwrap().is_visible());
+                    eprintln!("NEXUTERM_SMOKE_COMPACT_FOOTER_OK");
                     eprintln!("NEXUTERM_SMOKE_USAGE_OK");
                     return glib::ControlFlow::Break;
                 }

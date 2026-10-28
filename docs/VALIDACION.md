@@ -6,6 +6,20 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Pie de chat compacto — 27 de octubre de 2026
+
+- Dos filas como máximo: cuenta, cuota y acceso; contexto, tokens y avisos.
+  Sin salto de línea de las etiquetas, con detalle completo seleccionable y en
+  ayuda emergente. Se conservan inicio/cierre de sesión, acceso web y avisos de
+  errores; se elimina el aviso de éxito «Conversación recuperada».
+- Compilación de depuración correcta. Pruebas gráficas aprobadas: cuenta/cuota
+  con comprobación de las dos filas, conversación Codex, autenticación con y sin
+  cuenta existente, cierre de sesión, chats independientes, API Responses y Chat
+  Completions. Cuatro escenarios de espacios con chats aprobados, incluida
+  reanudación correcta sin aviso y fallo protegido.
+- Inspección visual de la captura de Codex en oscuro: cuenta/cuota y cierre de
+  sesión en la primera fila y contexto en la segunda, sin líneas adicionales.
+
 ## Recuperación automática de sesión — 27 de octubre de 2026
 
 - Copia independiente por ventana cada dos segundos, cuando no hay otra captura

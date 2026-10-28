@@ -289,6 +289,11 @@ las API reciben ese mismo contexto. Una ruta SSH se identifica como remota y no
 se utiliza como carpeta local del proceso. Si no hay una terminal activa, se
 conserva la carpeta configurada del agente.
 
+El pie del chat ocupa como máximo dos filas: cuenta, cuota y controles de acceso
+en la primera; contexto, tokens y avisos en la segunda. Los textos largos se
+abrevian visualmente y conservan su detalle en la ayuda emergente y al copiarlos.
+La reanudación correcta no muestra el aviso «Conversación recuperada».
+
 Cada chat muestra el usuario y la cuota restante cuando el proveedor los comunica.
 Codex presenta las ventanas de **5 horas** y **semanal** en porcentaje, si están
 incluidas en su respuesta, y la hora de renovación en la ayuda del indicador. Las

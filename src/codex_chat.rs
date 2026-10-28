@@ -24,6 +24,7 @@ pub(super) struct Chat {
 struct UsageView {
     account: gtk::Label,
     account_row: gtk::Box,
+    details_row: gtk::Box,
     quota: gtk::Label,
     context: gtk::Label,
     tokens: gtk::Label,
@@ -31,16 +32,42 @@ struct UsageView {
 }
 impl UsageView {
     fn new(parent: &gtk::Box) -> Self {
-        let view = Self { account_row: gtk::Box::new(gtk::Orientation::Horizontal, 4), account: gtk::Label::new(Some("Usuario: no disponible")), quota: gtk::Label::new(Some("Cuota restante: no disponible")), context: gtk::Label::new(None), tokens: gtk::Label::new(None), snapshot: Rc::new(RefCell::new(Value::Null)) };
-        view.account.set_widget_name("ai-account"); view.quota.set_widget_name("ai-quota");
+        let view = Self {
+            account_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+            details_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+            account: gtk::Label::new(Some("Usuario: no disponible")),
+            quota: gtk::Label::new(Some("Cuota restante: no disponible")),
+            context: gtk::Label::new(None),
+            tokens: gtk::Label::new(None),
+            snapshot: Rc::new(RefCell::new(Value::Null)),
+        };
+        view.account_row.set_widget_name("ai-footer-account");
+        view.details_row.set_widget_name("ai-footer-details");
+        view.account.set_widget_name("ai-account");
+        view.quota.set_widget_name("ai-quota");
+        view.context.set_widget_name("ai-context");
+        view.tokens.set_widget_name("ai-tokens");
         view.account.set_hexpand(true);
-        view.account.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        view.account_row.append(&view.account);
-        parent.append(&view.account_row);
+        view.quota.set_max_width_chars(30);
         for label in [&view.account, &view.quota, &view.context, &view.tokens] {
-            label.set_xalign(0.0); label.set_wrap(true); label.add_css_class("caption"); label.add_css_class("dim-label"); if label != &view.account { parent.append(label); }
+            label.set_xalign(0.0);
+            label.set_wrap(false);
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            label.set_selectable(true);
+            label.add_css_class("caption");
+            label.add_css_class("dim-label");
         }
-        view.account.set_wrap(false); view.context.set_visible(false); view.tokens.set_visible(false); view
+        view.account.connect_label_notify(|label|label.set_tooltip_text(Some(&label.text())));
+        view.account.set_tooltip_text(Some(&view.account.text()));
+        view.account_row.append(&view.account);
+        view.account_row.append(&view.quota);
+        view.details_row.append(&view.context);
+        view.details_row.append(&view.tokens);
+        parent.append(&view.account_row);
+        parent.append(&view.details_row);
+        view.context.set_visible(false);
+        view.tokens.set_visible(false);
+        view
     }
     fn reset(&self) {
         self.account.set_text("Usuario: no disponible"); self.context.set_visible(false); self.tokens.set_visible(false);
@@ -53,7 +80,7 @@ impl UsageView {
             self.quota.set_tooltip_text(Some("El proveedor no ha comunicado su cuota restante. No se estima a partir de los tokens usados."));
         } else {
             self.quota.set_text(&windows.iter().map(|w| format!("{}: {:.0}%", w.label, w.remaining)).collect::<Vec<_>>().join(" · "));
-            let mut detail = String::from("Cuota restante de la cuenta comunicada por el proveedor; puede estar compartida entre modelos.");
+            let mut detail = format!("{}\nCuota restante de la cuenta comunicada por el proveedor; puede estar compartida entre modelos.",self.quota.text());
             for w in windows { if let Some(date) = w.resets_at.and_then(|time| glib::DateTime::from_unix_local(time).ok()).and_then(|date| date.format("%d/%m %H:%M").ok()) { detail.push_str(&format!("\n{} se restablece: {date}", w.label)); } }
             self.quota.set_tooltip_text(Some(&detail));
         }
@@ -728,22 +755,25 @@ Puede solicitar permiso para leerlas.",
     editor.append(&toolbar);
     widget.append(&editor);
     let usage = UsageView::new(&widget);
-    let browser = gtk::LinkButton::with_label("about:blank", "Abrir inicio de sesión de ChatGPT");
+    let browser = gtk::LinkButton::with_label("about:blank", "Acceso web");
+    browser.set_tooltip_text(Some("Abrir el enlace de inicio de sesión del proveedor"));
     browser.add_css_class("ai-auth-control");
     browser.set_visible(false);
-    widget.append(&browser);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let row = usage.details_row.clone();
     let spinner = gtk::Spinner::new();
     let info = gtk::Label::new(Some("Chat de IA"));
-    info.set_wrap(true);
+    info.set_wrap(false);
+    info.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    info.set_selectable(true);
+    info.set_widget_name("ai-status");
     info.set_hexpand(true);
     info.set_xalign(0.0);
     info.add_css_class("dim-label");
     info.add_css_class("caption");
-    info.connect_label_notify(|label| label.set_visible(!label.text().is_empty()));
+    info.connect_label_notify(|label| { label.set_visible(!label.text().is_empty()); label.set_tooltip_text(Some(&label.text())); });
     row.append(&spinner);
     row.append(&info);
-    widget.append(&row);
+    row.append(&browser);
     let current = Rc::new(RefCell::new(None::<(String, Rc<Client>)>));
     let logout = gtk::LinkButton::with_label("about:blank", "Cerrar sesión");
     logout.set_widget_name("ai-logout");
@@ -751,6 +781,7 @@ Puede solicitar permiso para leerlas.",
     logout.add_css_class("ai-auth-control");
     logout.set_visible(false);
     usage.account_row.append(&logout);
+    usage.account_row.append(&login_button);
     let logout_client = current.clone();
     logout.connect_activate_link(move |_| {
         if let Some((_, client)) = logout_client.borrow().as_ref() { client.logout(); }
@@ -982,13 +1013,13 @@ Puede solicitar permiso para leerlas.",
                         }
                         Event::ContextUsage {used,size} => {
                             if let Some(remaining) = nexuterm::ai_usage::context_remaining(used,size) {
-                                usage.context.set_text(&format!("Contexto restante: {remaining:.0}%"));
+                                usage.context.set_text(&format!("Contexto: {remaining:.0}%"));
                                 usage.context.set_tooltip_text(Some(&format!("{used} de {size} tokens de contexto. No es la cuota de la cuenta.")));
                                 usage.context.set_visible(true);
                             } else { usage.context.set_visible(false); }
                         }
                         Event::TokenUsage {input,output} => {
-                            usage.tokens.set_text(&format!("Última petición: {input} tokens de entrada · {output} de salida")); usage.tokens.set_visible(true);
+                            usage.tokens.set_text(&format!("Tokens: {input} ↑ · {output} ↓")); usage.tokens.set_tooltip_text(Some(&format!("Última petición: {input} tokens de entrada · {output} de salida"))); usage.tokens.set_visible(true);
                         }
                         Event::Capabilities {
                             tools,
@@ -1108,7 +1139,7 @@ Puede solicitar permiso para leerlas.",
                                     }
                                 }
                             }
-                            info.set_text("Conversación recuperada.");
+                            info.set_text("");
                             if let Some(mode) = mode.upgrade() {
                                 mode.set_sensitive(false);
                             }

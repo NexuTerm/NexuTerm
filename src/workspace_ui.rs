@@ -1616,6 +1616,7 @@ pub(super) fn smoke_chats(state: &Rc<State>, window: &gtk::ApplicationWindow) {
                 assert_eq!(after.tabs[0].draft, resume_draft);
                 assert_eq!(after.tabs[0].messages, snap.tabs[0].messages);
             }
+            if mode=="resume" {assert!(named(&page,"ai-status").unwrap().downcast::<gtk::Label>().unwrap().text().is_empty());}
             eprintln!("NEXUTERM_SMOKE_CHATS_RESUME_OK");
         } else {
             // Closing even the last restored chat leaves a usable empty palette.
