@@ -20,11 +20,33 @@ restaurar, iniciar expresamente y tratar carpetas ausentes o perfiles eliminados
 Pendiente para cerrar la fase de espacios:
 
 - Historial completo local de chats y resultados supervisados; reanudación API/ACP,
-  adjuntos pendientes y estado visual del chat.
+  adjuntos pendientes y estado visual del chat. La copia visible y la
+  referencia nativa de Codex ya se integran en los espacios.
 - Integración de pestañas FTP/SFTP y escritorios remotos, panel enfocado,
   estado visual restante y recuperación automática de estructura.
 - Verificación específica de reconexión SSH restaurada contra el laboratorio;
   la prueba gráfica inicial de espacios utiliza terminales locales.
+
+## Chats asociados al espacio
+
+Implementado: copia privada de los mensajes visibles y el borrador, identidad,
+orden, selección, modelo, carpeta y visibilidad de la paleta. Se restaura sin
+conectar agentes ni transmitir contenido y se reutilizan los chats vivos sin
+sustituir sus cambios. Un perfil eliminado conserva su copia consultable. Si se
+supera el límite de ocho chats, se rechaza la apertura sin restauración parcial.
+
+Codex conserva su referencia nativa y ofrece reanudación explícita en solo lectura;
+no se permite enviar hasta confirmarla. Los fallos conservan la copia y el borrador.
+API/ACP quedan como copias consultables, sin simular la continuidad del contexto.
+Se mantiene la compatibilidad con espacios anteriores que no incluyen chats.
+
+No incluye historial ilimitado (se conservan hasta los 128 mensajes visibles),
+reanudación API/ACP, adjuntos pendientes, razonamiento, desplazamiento,
+ni registro separado de resultados supervisados. El autoguardado de la copia
+visible se describe en la entrega de recuperación automática.
+`lab/check_workspace_chats.py` prueba persistencia y reapertura entre procesos,
+reutilización, perfiles eliminados, capacidad, cierre y reanudación simulada de
+Codex, incluidos errores, sin modelos ni servicios externos.
 
 ## Documentos asociados al espacio
 

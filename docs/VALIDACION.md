@@ -6,6 +6,49 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Chats asociados a espacios — 27 de octubre de 2026
+
+- Integración en la paleta independiente de IA: identidad, agente referenciado,
+  modelo, carpeta, mensajes visibles, borrador, orden, selección y visibilidad.
+  Los chats vivos se reutilizan sin sustituir los cambios actuales. Las copias
+  se guardan en el JSON privado y atómico del espacio, con límites explícitos.
+- Restauración sin iniciar agentes, consultar credenciales ni enviar mensajes.
+  Los perfiles eliminados conservan la copia consultable. La capacidad de ocho
+  chats se comprueba antes de restaurar cualquier pestaña del espacio.
+- Codex publica la identidad de conversación creada/reanudada. La acción de
+  reanudación es explícita, arranca en solo lectura y bloquea el envío hasta
+  confirmación. Se conserva también el borrador editado después de restaurar.
+  Un error mantiene los mensajes y el borrador y bloquea incluso la invocación
+  directa del botón Enviar; no crea una conversación nueva ni un turno.
+- `cargo build --locked --jobs 2`: compilación correcta del ejecutable de depuración.
+  `cargo test --locked --jobs 2`: **70 pruebas aprobadas**, cuatro pruebas de
+  laboratorio omitidas por defecto; ninguna fallida. Se añadió cobertura de
+  esquema, compatibilidad con espacios sin chats, duplicados, límites y
+  conservación del archivo anterior ante datos inválidos. El protocolo nativo
+  verifica la identidad publicada al crear una conversación.
+- `python3 lab/check_workspace_chats.py`: cuatro escenarios aprobados:
+  guardar, restaurar, reanudar Codex y fallo al reanudar. El guardado incluye una
+  segunda ejecución que lee el archivo producido por la primera. Comprueba
+  contenido Unicode, bloques de código, mensajes de herramientas, copia de
+  respuesta, borradores, modelos, referencias de perfiles eliminados, identidad,
+  selección, reutilización, capacidad sin restauración parcial y cierre del
+  último chat. El protocolo simulado confirma `thread/resume` al destino y
+  carpeta guardados, sin `thread/start` ni `turn/start`. Sin modelos reales ni
+  servicios externos; Xvfb/X11 y XDG temporal.
+- Regresiones gráficas aprobadas: siete escenarios de documentos de espacios y
+  cuatro de espacios de terminales. También Codex con captura real de mensajes
+  y referencia nativa, nuevo chat con agente/modelo y cierre independiente,
+  dos turnos API Responses y Chat Completions, catálogo ACP, copia exacta del
+  Markdown al portapapeles e inicio de sesión Codex con cuenta simulada existente.
+- Inspección visual de la captura de reanudación: conversación recuperada,
+  pestañas independientes y borrador conservado. `git diff --check` y compilación
+  Python de los scripts nuevos/modificados correctos. Sin dependencias nuevas,
+  commit, push ni paquete de distribución nuevo. Clippy sigue sin estar disponible
+  en el toolchain local.
+- Alcance: copia de hasta los 128 mensajes visibles y el borrador al guardar el
+  espacio. No acredita historial ilimitado, reanudación API/ACP, adjuntos pendientes,
+  autoguardado ante caída ni validación contra una cuenta real de proveedor.
+
 ## Documentos y borradores asociados a espacios — 27 de octubre de 2026
 
 - El espacio conserva la identidad de cada editor, su origen y la referencia al
@@ -53,36 +96,6 @@ Consulta el [README](../README.md) para el uso y los límites actuales y la
 - Continúan pendientes el historial de chats, las pestañas FTP/SFTP y de
   escritorio remoto, el resto de estado visual y la recuperación automática de
   estructura. No se han hecho commits ni push ni generado un paquete de release.
-
-## Primera entrega de espacios de trabajo — 26 de octubre de 2026
-
-- Antes de implementar se publicó `a443439` en `origin/main`: corrección del
-  desplazamiento que cubría el botón de copiar. Compilación, suite Rust,
-  las dos pruebas gráficas de copia (Codex/ACP) y cinco pruebas de empaquetado
-  correctas; `HEAD...origin/main` quedó en `0 0` antes de los cambios nuevos.
-- Toolchain de esta ejecución: Rust 1.93.1 instalado por REA, GTK 4.22.4,
-  libadwaita 1.9.1 y VTE 0.84.0. No se actualizaron dependencias ni lockfile.
-- `cargo build --locked --offline --jobs 2`: correcto; binario de desarrollo
-  reconstruido. `cargo test --locked --offline --jobs 2`: 63 pruebas correctas,
-  cuatro integraciones ignoradas por defecto.
-- `python3 lab/check_workspaces.py`: cuatro procesos GTK aislados correctos:
-  guardar/renombrar, reapertura, carpeta ausente y perfil eliminado. Verificados
-  notas, permisos privados, divisiones anidadas, conservación de pestañas,
-  ausencia de ejecución automática y carpeta del proceso iniciado expresamente.
-  Capturas de diálogo y disposición revisadas en `artifacts/workspaces-*.png`.
-- `python3 lab/check_ui.py menus` y `close-splits`: correctos.
-- `python3 lab/check_remote_editor.py`: integración SSH/SCP real correcta y
-  recorridos GTK oscuro/claro correctos, con servidor y claves desechables.
-  Es una regresión del editor y navegador, no una prueba de reconexión desde
-  un espacio restaurado.
-- `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
-  Formato de los módulos Rust nuevos y `git diff --check`: correctos.
-- Xvfb se ejecutó desde la instalación local de laboratorio. Clippy no está
-  instalado en este toolchain; su comprobación no pudo ejecutarse. No se generó
-  un paquete de release ni se validaron otras distribuciones.
-- Esta entrega no cierra la fase de recuperación completa: documentos pendientes,
-  historial de chats y demás fases continúan en [MEJORAS.md](MEJORAS.md).
-
 
 ## Vinculación de borradores SSH y guardado atómico — 27 de octubre de 2026
 
@@ -153,6 +166,34 @@ Consulta el [README](../README.md) para el uso y los límites actuales y la
   No se han hecho nuevos commits ni push durante esta entrega. Se conservaron
   ajustes simultáneos ajenos a la tarea en `src/style.css`.
 
+## Primera entrega de espacios de trabajo — 26 de octubre de 2026
+
+- Antes de implementar se publicó `a443439` en `origin/main`: corrección del
+  desplazamiento que cubría el botón de copiar. Compilación, suite Rust,
+  las dos pruebas gráficas de copia (Codex/ACP) y cinco pruebas de empaquetado
+  correctas; `HEAD...origin/main` quedó en `0 0` antes de los cambios nuevos.
+- Toolchain de esta ejecución: Rust 1.93.1 instalado por REA, GTK 4.22.4,
+  libadwaita 1.9.1 y VTE 0.84.0. No se actualizaron dependencias ni lockfile.
+- `cargo build --locked --offline --jobs 2`: correcto; binario de desarrollo
+  reconstruido. `cargo test --locked --offline --jobs 2`: 63 pruebas correctas,
+  cuatro integraciones ignoradas por defecto.
+- `python3 lab/check_workspaces.py`: cuatro procesos GTK aislados correctos:
+  guardar/renombrar, reapertura, carpeta ausente y perfil eliminado. Verificados
+  notas, permisos privados, divisiones anidadas, conservación de pestañas,
+  ausencia de ejecución automática y carpeta del proceso iniciado expresamente.
+  Capturas de diálogo y disposición revisadas en `artifacts/workspaces-*.png`.
+- `python3 lab/check_ui.py menus` y `close-splits`: correctos.
+- `python3 lab/check_remote_editor.py`: integración SSH/SCP real correcta y
+  recorridos GTK oscuro/claro correctos, con servidor y claves desechables.
+  Es una regresión del editor y navegador, no una prueba de reconexión desde
+  un espacio restaurado.
+- `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
+  Formato de los módulos Rust nuevos y `git diff --check`: correctos.
+- Xvfb se ejecutó desde la instalación local de laboratorio. Clippy no está
+  instalado en este toolchain; su comprobación no pudo ejecutarse. No se generó
+  un paquete de release ni se validaron otras distribuciones.
+- Esta entrega no cierra la fase de recuperación completa: documentos pendientes,
+  historial de chats y demás fases continúan en [MEJORAS.md](MEJORAS.md).
 
 ## Whisper local instalado — 23 de octubre de 2026
 

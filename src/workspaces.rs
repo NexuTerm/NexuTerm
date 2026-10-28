@@ -51,6 +51,64 @@ pub struct Tab {
     pub layout: Layout,
 }
 
+/// A bounded, offline copy of the visible conversation, never executable permissions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatMessage {
+    pub title: String,
+    pub text: String,
+    pub tool: bool,
+    pub response: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Chat {
+    pub id: String,
+    pub title: String,
+    pub agent_id: Option<String>,
+    pub model: String,
+    pub directory: Option<PathBuf>,
+    pub codex_thread: Option<String>,
+    pub messages: Vec<ChatMessage>,
+    pub draft: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Chats {
+    pub tabs: Vec<Chat>,
+    pub selected: usize,
+    pub visible: bool,
+}
+impl Chats {
+    fn validate(&self) -> Result<(), String> {
+        if self.tabs.len() > 8 || (!self.tabs.is_empty() && self.selected >= self.tabs.len()) {
+            return Err("Selección o número de chats inválido".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for chat in &self.tabs {
+            uuid::Uuid::parse_str(&chat.id).map_err(|_| "Identificador de chat inválido")?;
+            if !ids.insert(&chat.id)
+                || chat.messages.len() > 128
+                || chat.draft.len() > 65536
+                || chat.title.len() > 1024
+                || chat.model.len() > 4096
+                || chat.agent_id.as_ref().is_some_and(|v| v.len() > 4096)
+                || chat.codex_thread.as_ref().is_some_and(|v| {
+                    v.is_empty() || v.len() > 4096 || v.chars().any(char::is_control)
+                })
+                || chat.directory.as_ref().is_some_and(|p| !p.is_absolute())
+                || chat
+                    .messages
+                    .iter()
+                    .any(|m| m.title.len() > 4096 || m.text.len() > 262144)
+            {
+                return Err("Contenido de chat inválido o demasiado grande".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workspace {
@@ -61,6 +119,8 @@ pub struct Workspace {
     pub selected: usize,
     pub directory: Option<PathBuf>,
     pub sidebar_visible: bool,
+    #[serde(default)]
+    pub chats: Chats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -145,6 +205,7 @@ impl Store {
         }
         let mut ids = std::collections::HashSet::new();
         for workspace in &self.workspaces {
+            workspace.chats.validate()?;
             if workspace.id.is_empty() || !ids.insert(&workspace.id) {
                 return Err("Identificador de espacio inválido o duplicado".into());
             }
@@ -252,6 +313,7 @@ mod tests {
             selected: 0,
             directory: Some("/tmp".into()),
             sidebar_visible: true,
+            chats: Chats::default(),
         }
     }
     #[test]
@@ -355,5 +417,61 @@ mod tests {
         };
         assert!(store.save(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+    #[test]
+    fn chats_roundtrip_limits_and_legacy() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("workspaces.json");
+        let mut w = workspace();
+        w.chats = Chats {
+            tabs: vec![Chat {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Prueba".into(),
+                agent_id: Some("fixture".into()),
+                model: "modelo".into(),
+                directory: Some("/tmp".into()),
+                codex_thread: Some("thread".into()),
+                messages: vec![ChatMessage {
+                    title: "Tú".into(),
+                    text: "Texto áé\n```rust\n```".into(),
+                    tool: false,
+                    response: false,
+                }],
+                draft: "Sin enviar".into(),
+            }],
+            selected: 0,
+            visible: true,
+        };
+        let mut store = Store {
+            version: 1,
+            workspaces: vec![w],
+        };
+        store.save(&path).unwrap();
+        assert_eq!(Store::load(&path).unwrap().workspaces, store.workspaces);
+        let original = fs::read(&path).unwrap();
+        let chat = store.workspaces[0].chats.tabs[0].clone();
+        store.workspaces[0].chats.tabs.push(chat);
+        assert!(store.save(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        store.workspaces[0].chats.tabs.pop();
+        store.workspaces[0].chats.tabs[0].draft = "x".repeat(65537);
+        assert!(store.save(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        store.workspaces[0].chats.tabs[0].draft.clear();
+        store.workspaces[0].chats.selected = 1;
+        assert!(store.save(&path).is_err());
+        store.workspaces[0].chats.selected = 0;
+        store.workspaces[0].chats.tabs[0].directory = Some("relative".into());
+        assert!(store.save(&path).is_err());
+        let mut legacy: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        legacy["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("chats");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(
+            Store::load(&path).unwrap().workspaces[0].chats,
+            Chats::default()
+        );
     }
 }

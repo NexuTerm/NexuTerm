@@ -12,6 +12,8 @@ type Dialogs = Rc<RefCell<HashMap<String, (glib::WeakRef<gtk::Window>, Rc<Cell<b
 #[derive(Clone)]
 pub(super) struct Chat {
     pub widget: gtk::Box,
+    pub snapshot: Rc<dyn Fn() -> nexuterm::workspaces::Chat>,
+    pub restore: Rc<dyn Fn(&nexuterm::workspaces::Chat)>,
     pub open: Rc<dyn Fn(AiAgent, bool)>,
     pub close: Rc<dyn Fn()>,
     pub history: gtk::Box,
@@ -61,14 +63,18 @@ impl UsageView {
 fn message(list: &gtk::Box, title: &str, content: &str, tool: bool, copy_response: bool) -> gtk::Label {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("card");
+    if tool { card.add_css_class("workspace-tool"); }
+    if copy_response { card.add_css_class("workspace-response"); }
     card.set_margin_top(4);
     card.set_margin_bottom(4);
     let heading = gtk::Label::new(Some(title));
     heading.add_css_class("heading");
+    heading.set_widget_name("workspace-message-title");
     heading.set_xalign(0.0);
     heading.set_margin_top(10);
     heading.set_margin_start(12);
     let text = gtk::Label::new(Some(&content.chars().take(65536).collect::<String>()));
+    text.set_widget_name("workspace-message-text");
     text.set_wrap(true);
     text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     text.set_selectable(true);
@@ -500,6 +506,7 @@ pub(super) fn build(state: &Rc<State>, process: &Rc<ai_panel::Process>) -> Chat 
     overlay.set_child(Some(&scroll));
     overlay.set_vexpand(true);
     let welcome = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    welcome.set_widget_name("codex-welcome");
     welcome.set_halign(gtk::Align::Center);
     welcome.set_valign(gtk::Align::Center);
     let logo = gtk::Image::from_icon_name("utilities-terminal-symbolic");
@@ -763,7 +770,17 @@ Puede solicitar permiso para leerlas.",
         let models = usage_models.borrow();
         usage_choice.render(models.get(choice.selected() as usize).and_then(|v|v["model"].as_str()).unwrap_or(""));
     });
+    let offline = Rc::new(RefCell::new(None::<nexuterm::workspaces::Chat>));
+    let saved_agent = Rc::new(RefCell::new(None::<AiAgent>));
+    let session = Rc::new(RefCell::new(None::<String>));
+    let pending_resume = Rc::new(RefCell::new(None::<nexuterm::workspaces::Chat>));
+    let awaiting_resume = Rc::new(Cell::new(false));
     let open: Rc<dyn Fn(AiAgent, bool)> = {
+        let offline = offline.clone();
+        let saved_agent = saved_agent.clone();
+        let session = session.clone();
+        let pending_resume = pending_resume.clone();
+        let awaiting_resume = awaiting_resume.clone();
         let usage = usage.clone();
         let welcome = welcome.downgrade();
         let recent = recent.downgrade();
@@ -786,7 +803,12 @@ Puede solicitar permiso para leerlas.",
         let logout = logout.downgrade();
         let effort = effort.downgrade();
         Rc::new(move |mut agent, login| {
-            if let Some(directory) = s.upgrade().and_then(|state|agent_workspace(&state)).and_then(|workspace|workspace.local_directory) {
+            let resume = pending_resume.borrow_mut().take();
+            if resume.is_none() {
+                if let Some(directory) = s.upgrade().and_then(|state| agent_workspace(&state)).and_then(|workspace| workspace.local_directory) {
+                    agent.directory = directory.to_string_lossy().into_owned();
+                }
+            } else if let Some(directory) = resume.as_ref().and_then(|c| c.directory.as_ref()) {
                 agent.directory = directory.to_string_lossy().into_owned();
             }
             if let Some(link) = logout.upgrade() { link.set_visible(false); }
@@ -805,6 +827,13 @@ Puede solicitar permiso para leerlas.",
                         client.login();
                         return;
                     }
+            *offline.borrow_mut() = None;
+            if agent.directory.is_empty() {
+                agent.directory = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            }
+            *saved_agent.borrow_mut() = Some(agent.clone());
+            *session.borrow_mut() = resume.as_ref().and_then(|c|c.codex_thread.clone());
+            awaiting_resume.set(resume.is_some());
             let (
                 Some(list),
                 Some(input),
@@ -904,6 +933,9 @@ Puede solicitar permiso para leerlas.",
             let model = model.clone();
             let model_names = model_names.clone();
             let mode = mode.downgrade();
+            let session = session.clone();
+            let mut resume_to_load = resume;
+            let awaiting_resume = awaiting_resume.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(35), move || {
                 if generations.get() != epoch {
                     return glib::ControlFlow::Break;
@@ -1044,7 +1076,9 @@ Puede solicitar permiso para leerlas.",
                                 }
                             }
                         }
+                        Event::Session(id) => { *session.borrow_mut() = Some(id); }
                         Event::Resumed(thread) => {
+                            awaiting_resume.set(false);
                             while let Some(child) = list.first_child() {
                                 list.remove(&child);
                             }
@@ -1097,6 +1131,9 @@ Puede solicitar permiso para leerlas.",
                                 }
                             }
                             ready = authenticated;
+                            if ready && let Some(saved) = resume_to_load.take() {
+                                if let Some(id) = saved.codex_thread { client.resume(id); }
+                            }
                             info.set_text(if ready {
                                 ""
                             } else {
@@ -1347,12 +1384,21 @@ Puede solicitar permiso para leerlas.",
                             if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("codex")
                                 && status == "completed"
                             {
+                                if let Some(state)=s.upgrade() {
+                                    let chats=(state.ai_workspace.borrow().as_ref().unwrap().capture)();
+                                    let chat=&chats.tabs[chats.selected];
+                                    assert_eq!(chat.codex_thread.as_deref(),Some("fixture-thread"));
+                                    assert!(chat.messages.iter().any(|m|m.response && m.text=="Respuesta gráfica de Codex."));
+                                    assert!(chat.messages.iter().any(|m|m.title=="Tú" && m.text.contains("Mensaje gráfico de prueba")));
+                                    assert!(chat.draft.is_empty());
+                                    eprintln!("NEXUTERM_SMOKE_CHAT_SNAPSHOT_OK");
+                                }
                                 eprintln!("NEXUTERM_SMOKE_CODEX_NATIVE_OK");
                             }
                         }
                         Event::Error(error) => {
                             close_dialogs(&dialogs);
-                            message(&list, "Codex · error", &error, false, false);
+                            if !awaiting_resume.get() { message(&list, "Codex · error", &error, false, false); }
                             info.set_text(&error);
                         }
                         Event::Closed => {
@@ -1369,7 +1415,7 @@ Puede solicitar permiso para leerlas.",
                     welcome.set_visible(list.first_child().is_none());
                 }
                 if let Some(link) = logout.upgrade() { link.set_sensitive(!client.busy()); }
-                send.set_sensitive(ready && !client.busy());
+                send.set_sensitive(ready && !client.busy() && !awaiting_resume.get());
                 spinner.set_visible(client.busy());
                 if client.busy() {
                     spinner.start();
@@ -1394,7 +1440,10 @@ Puede solicitar permiso para leerlas.",
     let paths = context.clone();
     let chips = context_row.downgrade();
     let workspace_state = Rc::downgrade(state);
+    let snapshot_models = models.clone();
+    let resume_guard = awaiting_resume.clone();
     send.connect_clicked(move |_| {
+        if resume_guard.get() { return; }
         let (Some(input), Some(list), Some(info)) =
             (input.upgrade(), list_weak.upgrade(), status.upgrade())
         else {
@@ -1497,12 +1546,199 @@ Puede solicitar permiso para leerlas.",
             glib::ControlFlow::Continue
         });
     }
+    let snapshot: Rc<dyn Fn() -> nexuterm::workspaces::Chat> = {
+        let list = list.downgrade();
+        let input = composer.downgrade();
+        let offline = offline.clone();
+        let agent = saved_agent.clone();
+        let session = session.clone();
+        let models = snapshot_models.clone();
+        let model = model.downgrade();
+        Rc::new(move || {
+            fn named(widget: &gtk::Widget, name: &str) -> Option<gtk::Label> {
+                if widget.widget_name() == name {
+                    return widget.clone().downcast().ok();
+                }
+                let mut child = widget.first_child();
+                while let Some(w) = child {
+                    if let Some(v) = named(&w, name) {
+                        return Some(v);
+                    }
+                    child = w.next_sibling();
+                }
+                None
+            }
+            let mut messages = Vec::new();
+            if let Some(list) = list.upgrade() {
+                let mut child = list.first_child();
+                while let Some(card) = child {
+                    if let (Some(title), Some(text)) = (
+                        named(&card, "workspace-message-title"),
+                        named(&card, "workspace-message-text"),
+                    ) {
+                        messages.push(nexuterm::workspaces::ChatMessage {
+                            title: title.text().to_string(),
+                            text: text.text().to_string(),
+                            tool: card.has_css_class("workspace-tool"),
+                            response: card.has_css_class("workspace-response"),
+                        });
+                    }
+                    child = card.next_sibling();
+                }
+            }
+            if let Some(mut saved) = offline.borrow().clone() {
+                saved.messages = messages;
+                saved.draft = input
+                    .upgrade()
+                    .map(|v| {
+                        let b = v.buffer();
+                        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
+                    })
+                    .unwrap_or_default();
+                return saved;
+            }
+            let agent = agent.borrow();
+            let selected_model = model.upgrade().and_then(|m| {
+                models
+                    .borrow()
+                    .get(m.selected() as usize)
+                    .and_then(|v| v["model"].as_str())
+                    .map(str::to_owned)
+            });
+            nexuterm::workspaces::Chat {
+                id: String::new(),
+                title: String::new(),
+                agent_id: agent.as_ref().map(|a| a.id.clone()),
+                model: selected_model
+                    .or_else(|| agent.as_ref().map(|a| a.model.clone()))
+                    .unwrap_or_default(),
+                directory: agent
+                    .as_ref()
+                    .map(|a| std::path::PathBuf::from(&a.directory))
+                    .filter(|p| p.is_absolute()),
+                codex_thread: session.borrow().clone(),
+                messages,
+                draft: input
+                    .upgrade()
+                    .map(|v| {
+                        let b = v.buffer();
+                        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
+                    })
+                    .unwrap_or_default(),
+            }
+        })
+    };
+    let restore: Rc<dyn Fn(&nexuterm::workspaces::Chat)> = {
+        let list = list.downgrade();
+        let welcome = welcome.downgrade();
+        let history = history.downgrade();
+        let input = composer.downgrade();
+        let notice = info.downgrade();
+        let send = send.downgrade();
+        let s = Rc::downgrade(state);
+        let open = open.clone();
+        let offline = offline.clone();
+        let model_names = model_names.clone();
+        let model = model.downgrade();
+        let models = snapshot_models.clone();
+        let pending = pending_resume.clone();
+        let agent_state = saved_agent.clone();
+        let session = session.clone();
+        let login = login_button.downgrade();
+        Rc::new(move |saved| {
+            *offline.borrow_mut() = Some(saved.clone());
+            if let Some(welcome)=welcome.upgrade(){welcome.set_visible(saved.messages.is_empty());}
+            if let Some(history)=history.upgrade(){history.set_visible(false);}
+            model_names.splice(
+                0,
+                model_names.n_items(),
+                &[if saved.model.is_empty() {
+                    "Modelo predeterminado"
+                } else {
+                    &saved.model
+                }],
+            );
+            *models.borrow_mut() = vec![json!({"model":saved.model})];
+            if let Some(model) = model.upgrade() {
+                model.set_selected(0);
+            }
+            let (Some(list), Some(input), Some(info), Some(send)) = (
+                list.upgrade(),
+                input.upgrade(),
+                notice.upgrade(),
+                send.upgrade(),
+            ) else {
+                return;
+            };
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            for m in &saved.messages {
+                message(&list, &m.title, &m.text, m.tool, m.response);
+            }
+            input.buffer().set_text(&saved.draft);
+            send.set_sensitive(false);
+            if let Some(login) = login.upgrade() {
+                login.set_visible(false);
+            }
+            *session.borrow_mut() = saved.codex_thread.clone();
+            let agent = s.upgrade().and_then(|s| {
+                s.config
+                    .borrow()
+                    .ai_agents
+                    .iter()
+                    .find(|a| Some(&a.id) == saved.agent_id.as_ref())
+                    .cloned()
+            });
+            *agent_state.borrow_mut() = agent.clone().map(|mut a| {
+                a.model = saved.model.clone();
+                if let Some(d) = &saved.directory {
+                    a.directory = d.to_string_lossy().into_owned();
+                }
+                a
+            });
+            info.set_text(if agent.is_none(){"El perfil ya no existe. Copia local del chat; utiliza + para iniciar otra conversación."}else{"Copia local del chat. No se ha conectado ni enviado contenido. Usa + para iniciar otra conversación."});
+            if let Some(mut agent) = agent.filter(|a| a.is_codex())
+                && saved.codex_thread.is_some()
+            {
+                let resume = gtk::Button::with_label("Reanudar conversación de Codex");
+                resume.set_widget_name("workspace-resume-chat");
+                list.append(&resume);
+                agent.model = saved.model.clone();
+                let saved = saved.clone();
+                let pending = pending.clone();
+                let open = open.clone();
+                let list = list.downgrade();
+                let input = input.downgrade();
+                resume.connect_clicked(move |_| {
+                    let mut saved = saved.clone();
+                    if let Some(input) = input.upgrade() {
+                        let b = input.buffer();
+                        saved.draft = b.text(&b.start_iter(), &b.end_iter(), false).to_string();
+                    }
+                    *pending.borrow_mut() = Some(saved.clone());
+                    open(agent.clone(), false);
+                    // Keep the offline copy until the provider confirms a successful resume.
+                    if let Some(list) = list.upgrade() {
+                        for m in &saved.messages {
+                            message(&list, &m.title, &m.text, m.tool, m.response);
+                        }
+                    }
+                    if let Some(input) = input.upgrade() {
+                        input.buffer().set_text(&saved.draft);
+                    }
+                });
+            }
+        })
+    };
     let close: Rc<dyn Fn()> = Rc::new(move || {
         generation.set(generation.get() + 1);
         close_dialogs(&dialogs);
         if let Some((_, client)) = current.borrow_mut().take() { client.close(); }
     });
     Chat {
+        snapshot,
+        restore,
         models: catalog,
         close,
         widget,

@@ -74,11 +74,13 @@ fn native_protocol_streams_reuses_thread_denies_approval_and_interrupts() {
     nexuterm::runtime::runtime().block_on(async {
         let (client, mut rx) = fixture.start();
         assert!(matches!(event(&mut rx).await, Event::Ready(true)));
+        let mut session = None;
         for _ in 0..2 {
             assert!(client.send("hola".into()));
             let mut text = String::new();
             loop {
                 match event(&mut rx).await {
+                    Event::Session(id) => { session = Some(id); }
                     Event::Delta { text: delta, .. } => text.push_str(&delta),
                     Event::Finished(s) => {
                         assert_eq!(s, "completed");
@@ -89,6 +91,7 @@ fn native_protocol_streams_reuses_thread_denies_approval_and_interrupts() {
                 }
             }
             assert_eq!(text, "Respuesta gráfica de Codex.");
+            assert_eq!(session.as_deref(), Some("fixture-thread"));
         }
         assert!(client.send("approval".into()));
         loop {

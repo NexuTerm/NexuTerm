@@ -12,6 +12,7 @@ use std::{
 use vte4::prelude::*;
 
 pub struct State {
+    ai_workspace: RefCell<Option<ai_panel::WorkspaceChats>>,
     ai_process: RefCell<Option<Rc<ai_panel::Process>>>,
     ai_keys: RefCell<std::collections::HashMap<(String, String), zeroize::Zeroizing<String>>>,
     pub notebook: adw::TabView,
@@ -298,6 +299,7 @@ pub fn build(app: &gtk::Application) {
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        ai_workspace: RefCell::new(None),
         ai_process: RefCell::new(None),
         ai_keys: RefCell::new(std::collections::HashMap::new()),
         notebook,
@@ -477,6 +479,8 @@ pub fn build(app: &gtk::Application) {
     if std::env::var_os("NEXUTERM_SMOKE_WORKSPACES").is_some() {
         workspace_ui::smoke(&state, &window);
     }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_CHATS").is_some() { workspace_ui::smoke_chats(&state,&window); }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_DOCUMENTS").is_some() {
         workspace_ui::smoke_documents(&state, &window);
@@ -747,7 +751,8 @@ pub fn build(app: &gtk::Application) {
             20
         } else if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(),Ok("dictation"|"terminals"|"new-chat")) {
             10
-        } else if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+        } else if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_CHATS").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_BROWSER_FEATURES").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {

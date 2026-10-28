@@ -147,7 +147,12 @@ pub(super) fn capture(state: &State, id: String, name: String, notes: String) ->
             .unwrap_or(0),
         directory: state.local_files.borrow().as_ref().map(|p| p.directory()),
         sidebar_visible: state.sidebar_area.is_visible(),
-
+        chats: state
+            .ai_workspace
+            .borrow()
+            .as_ref()
+            .map(|p| (p.capture)())
+            .unwrap_or_default(),
     }
 }
 
@@ -531,6 +536,12 @@ fn restore_document(
 }
 
 pub(super) fn restore(state: &Rc<State>, workspace: &Workspace) -> bool {
+    if let Some(panel) = state.ai_workspace.borrow().as_ref() {
+        if let Err(error) = (panel.restore)(&workspace.chats) {
+            state.status.set_text(&error);
+            return false;
+        }
+    }
     let offset = state.notebook.n_pages();
     for tab in &workspace.tabs {
         let connections = Rc::new(RefCell::new(std::collections::HashMap::new()));
@@ -632,7 +643,7 @@ pub(super) fn show(state: &Rc<State>, window: &gtk::ApplicationWindow) {
     body.set_margin_start(16);
     body.set_margin_end(16);
     let info = gtk::Label::new(Some(
-        "Guarda terminales, divisiones, documentos, borradores, rutas y notas. Chats y otras pestañas siguen pendientes. Abrir conserva el trabajo actual y reutiliza los documentos ya abiertos.",
+        "Guarda terminales, divisiones, documentos, borradores, rutas y notas. Incluye mensajes visibles y borradores de chats, sin conectarlos automáticamente. Abrir conserva el trabajo actual y reutiliza los documentos ya abiertos.",
     ));
     info.set_wrap(true);
     body.append(&info);
@@ -1443,3 +1454,186 @@ pub(super) fn smoke_documents(state: &Rc<State>, window: &gtk::ApplicationWindow
     });
 }
 
+#[cfg(debug_assertions)]
+pub(super) fn smoke_chats(state: &Rc<State>, window: &gtk::ApplicationWindow) {
+    fn named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+        if root.widget_name() == name {
+            return Some(root.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(w) = child {
+            if let Some(found) = named(&w, name) {
+                return Some(found);
+            }
+            child = w.next_sibling();
+        }
+        None
+    }
+    let state = state.clone();
+    let window = window.clone();
+    glib::spawn_future_local(async move {
+        glib::timeout_future(std::time::Duration::from_millis(200)).await;
+        let mode = std::env::var("NEXUTERM_SMOKE_WORKSPACE_CHATS").unwrap();
+        let stored = Store::load(&Store::path().unwrap()).unwrap();
+        let expected = stored.workspaces[0].chats.clone();
+        show(&state, &window);
+        let manager = state.workspace_manager.borrow().upgrade().unwrap();
+        let selector = smoke_widget(manager.upcast_ref(), gtk::DropDown::static_type())
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        selector.set_selected(0);
+        find_button(manager.upcast_ref(), "Abrir")
+            .unwrap()
+            .emit_clicked();
+        drop(selector);
+        drop(manager);
+        assert_eq!(
+            (state.ai_workspace.borrow().as_ref().unwrap().capture)(),
+            expected,
+            "offline restore must preserve every field"
+        );
+        assert!(!state.ai_process.borrow().as_ref().unwrap().busy());
+        let notebook = named(window.upcast_ref(), "ai-conversations")
+            .unwrap()
+            .downcast::<gtk::Notebook>()
+            .unwrap();
+        assert_eq!(notebook.n_pages(), expected.tabs.len() as u32);
+        assert_eq!(notebook.current_page(), Some(expected.selected as u32));
+        let page = notebook.nth_page(notebook.current_page()).unwrap();
+        let input = named(&page, "codex-composer")
+            .unwrap()
+            .downcast::<gtk::TextView>()
+            .unwrap();
+        input
+            .buffer()
+            .set_text("Borrador editado después de recuperar áé\n");
+        restore(&state, &stored.workspaces[0]);
+        assert_eq!(notebook.n_pages(), expected.tabs.len() as u32);
+        assert_eq!(
+            input.buffer().text(
+                &input.buffer().start_iter(),
+                &input.buffer().end_iter(),
+                false
+            ),
+            "Borrador editado después de recuperar áé\n"
+        );
+        let before = state.notebook.n_pages();
+        let chats_before = (state.ai_workspace.borrow().as_ref().unwrap().capture)();
+        restore(&state, &stored.workspaces[1]);
+        assert_eq!(
+            state.notebook.n_pages(),
+            before,
+            "capacity rejection must not partially restore terminal tabs"
+        );
+        assert_eq!(
+            (state.ai_workspace.borrow().as_ref().unwrap().capture)(),
+            chats_before
+        );
+        assert!(state.status.text().contains("máximo de ocho"));
+        if mode == "save" {
+            show(&state, &window);
+            let manager = state.workspace_manager.borrow().upgrade().unwrap();
+            smoke_widget(manager.upcast_ref(), gtk::DropDown::static_type())
+                .unwrap()
+                .downcast::<gtk::DropDown>()
+                .unwrap()
+                .set_selected(0);
+            smoke_widget(manager.upcast_ref(), gtk::Entry::static_type())
+                .unwrap()
+                .downcast::<gtk::Entry>()
+                .unwrap()
+                .set_text(&stored.workspaces[0].name);
+            find_button(manager.upcast_ref(), "Guardar pestañas actuales")
+                .unwrap()
+                .emit_clicked();
+            let status = named(manager.upcast_ref(), "workspace-save-status")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap();
+            for _ in 0..60 {
+                glib::timeout_future(std::time::Duration::from_millis(30)).await;
+                if status.text().starts_with("Espacio guardado")
+                    || status.text().starts_with("No se guardó")
+                {
+                    break;
+                }
+            }
+            assert!(
+                status.text().starts_with("Espacio guardado"),
+                "{}",
+                status.text()
+            );
+            let saved = Store::load(&Store::path().unwrap()).unwrap();
+            assert_eq!(saved.workspaces[0].chats, chats_before);
+            eprintln!("NEXUTERM_SMOKE_CHATS_SAVE_OK");
+        } else if mode == "resume" || mode == "resume-failure" {
+            notebook.set_current_page(Some(0));
+            let page = notebook.nth_page(Some(0)).unwrap();
+            let resume = named(&page, "workspace-resume-chat")
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+            let resume_draft = "Borrador editado antes de reanudar áé\n";
+            named(&page, "codex-composer")
+                .unwrap()
+                .downcast::<gtk::TextView>()
+                .unwrap()
+                .buffer()
+                .set_text(resume_draft);
+            resume.emit_clicked();
+            for _ in 0..70 {
+                glib::timeout_future(std::time::Duration::from_millis(35)).await;
+                let snap = (state.ai_workspace.borrow().as_ref().unwrap().capture)();
+                if mode == "resume"
+                    && snap.tabs[0]
+                        .messages
+                        .iter()
+                        .any(|m| m.text == "Respuesta anterior")
+                {
+                    break;
+                }
+            }
+            let snap = (state.ai_workspace.borrow().as_ref().unwrap().capture)();
+            assert_eq!(snap.tabs[0].codex_thread.as_deref(), Some("fixture-thread"));
+            assert_eq!(snap.tabs[0].draft, resume_draft);
+            if mode == "resume" {
+                assert!(
+                    snap.tabs[0]
+                        .messages
+                        .iter()
+                        .any(|m| m.text == "Respuesta anterior")
+                );
+            } else {
+                assert_eq!(snap.tabs[0].messages, expected.tabs[0].messages);
+                let send = named(&page, "codex-send")
+                    .unwrap()
+                    .downcast::<gtk::Button>()
+                    .unwrap();
+                assert!(!send.is_sensitive());
+                send.emit_clicked();
+                let after = (state.ai_workspace.borrow().as_ref().unwrap().capture)();
+                assert_eq!(after.tabs[0].draft, resume_draft);
+                assert_eq!(after.tabs[0].messages, snap.tabs[0].messages);
+            }
+            eprintln!("NEXUTERM_SMOKE_CHATS_RESUME_OK");
+        } else {
+            // Closing even the last restored chat leaves a usable empty palette.
+            for _ in 0..expected.tabs.len() {
+                let page = notebook.nth_page(Some(0)).unwrap();
+                named(&notebook.tab_label(&page).unwrap(), "workspace-close-chat")
+                    .unwrap()
+                    .downcast::<gtk::Button>()
+                    .unwrap()
+                    .emit_clicked();
+            }
+            assert_eq!(notebook.n_pages(), 1);
+            assert!(
+                (state.ai_workspace.borrow().as_ref().unwrap().capture)()
+                    .tabs
+                    .is_empty()
+            );
+            eprintln!("NEXUTERM_SMOKE_CHATS_RESTORE_OK");
+        }
+    });
+}

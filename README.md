@@ -99,14 +99,32 @@ texto ni crea versiones congeladas del contenido. El borrado del espacio no
 elimina documentos, originales o borradores. Se siguen admitiendo los espacios
 anteriores de terminales.
 
-Chats, pestañas FTP/SFTP y escritorios remotos, foco, zoom, scrollback y recuperación automática de estructura siguen pendientes.
+Los chats de la paleta se guardan con identidad estable, orden, selección,
+visibilidad, agente referenciado, modelo, carpeta, mensajes visibles y texto aún
+sin enviar. Abrir el espacio los recupera sin ejecutar agentes, acceder a claves
+ni transmitir mensajes. Si un chat ya está abierto, conserva su posición y su
+contenido actual. Si la suma supera ocho chats, se rechaza la apertura completa
+antes de añadir pestañas; hay que cerrar alguno primero. Un perfil eliminado no
+impide consultar su copia local.
 
-Prueba aislada de persistencia y restauración entre procesos:
+Cuando existe una referencia de conversación de Codex y sigue configurado su
+perfil, **Reanudar conversación de Codex** inicia el agente y solicita esa
+conversación expresamente, con permisos iniciales de solo lectura. Solo se
+habilita el envío cuando el proveedor confirma la reanudación. Un fallo conserva
+los mensajes locales y el borrador. API y ACP se recuperan como copias consultables:
+para una conversación nueva utiliza **+**, sin reenviar automáticamente el historial.
+No se guardan claves, permisos concedidos, procesos ni solicitudes de aprobación.
 
-```bash
-python3 lab/check_workspaces.py
-python3 lab/check_workspace_documents.py
-```
+Esta entrega conserva hasta los 128 mensajes visibles por chat y el borrador del
+editor; no es un archivo de todo el historial del proveedor. Los archivos adjuntos
+pendientes, el razonamiento seleccionado y el desplazamiento no se restauran.
+Los chats quedan incluidos en el JSON privado del espacio al guardarlo; la captura automática de sesión sigue pendiente. Se mantienen los límites de ocho chats,
+64 KiB de borrador por chat y 16 MiB para el archivo completo; si se exceden se
+rechaza el guardado y se conserva el archivo anterior.
+
+Las pestañas de exploración FTP/SFTP y escritorio remoto siguen pendientes de
+integración, así como scrollback, zoom y panel enfocado. Los siguientes pasos están en
+[la hoja de ruta](docs/MEJORAS.md).
 
 ## Recuperación de documentos
 
@@ -168,7 +186,6 @@ python3 lab/check_recovery.py
 La prueba usa Xvfb, D-Bus y datos temporales: incluye `SIGKILL` real, recuperación
 entre procesos, cambios externos, original ausente, borrador remoto sin conexión,
 descarte confirmado y bloqueo del cierre cuando falla el almacenamiento.
-
 
 ## Agentes de IA y chat
 

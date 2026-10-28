@@ -37,7 +37,12 @@ impl Drop for Process {
         self.shutdown();
     }
 }
+pub(super) struct WorkspaceChats {
+    pub capture: Rc<dyn Fn() -> nexuterm::workspaces::Chats>,
+    pub restore: Rc<dyn Fn(&nexuterm::workspaces::Chats) -> Result<(), String>>,
+}
 struct Conversation {
+    id: String,
     page: gtk::Box,
     chat: super::codex_chat::Chat,
     process: Rc<Process>,
@@ -50,6 +55,7 @@ fn conversation(state: &Rc<State>, process: Rc<Process>) -> Rc<Conversation> {
     page.append(&chat.widget);
     page.append(&chat.login);
     Rc::new(Conversation {
+        id: uuid::Uuid::new_v4().to_string(),
         page,
         chat,
         process,
@@ -674,7 +680,161 @@ pub(super) fn install(
         }
         go(true);
     });
-    let first = Cell::new(true);
+    let first = Rc::new(Cell::new(true));
+    let capture: Rc<dyn Fn() -> nexuterm::workspaces::Chats> = {
+        let chats = conversations.clone();
+        let n = notebook.downgrade();
+        let side = side.downgrade();
+        Rc::new(move || {
+            let n = n.upgrade();
+            let mut tabs = Vec::new();
+            let mut selected = 0;
+            for c in chats.borrow().iter() {
+                let mut saved = (c.chat.snapshot)();
+                if saved.agent_id.is_none() && saved.messages.is_empty() && saved.draft.is_empty() {
+                    continue;
+                }
+                if n.as_ref()
+                    .is_some_and(|n| n.current_page() == n.page_num(&c.page))
+                {
+                    selected = tabs.len();
+                }
+                saved.id = c.id.clone();
+                saved.title = c.label.text().to_string();
+                tabs.push(saved);
+            }
+            nexuterm::workspaces::Chats {
+                tabs,
+                selected,
+                visible: side.upgrade().is_some_and(|s| s.is_visible()),
+            }
+        })
+    };
+    let restore: Rc<dyn Fn(&nexuterm::workspaces::Chats) -> Result<(), String>> = {
+        let chats = conversations.clone();
+        let n = notebook.downgrade();
+        let side = side.downgrade();
+        let s = Rc::downgrade(state);
+        let root = process.clone();
+        let first = first.clone();
+        let go = launch.clone();
+        let active = active.clone();
+        Rc::new(move |saved| {
+            let (Some(state), Some(n)) = (s.upgrade(), n.upgrade()) else {
+                return Err("Paleta de chats no disponible".into());
+            };
+            let existing = chats.borrow();
+            let missing = saved
+                .tabs
+                .iter()
+                .filter(|t| !existing.iter().any(|c| c.id == t.id))
+                .count();
+            let empty: Vec<_> = existing
+                .iter()
+                .filter(|c| {
+                    let t = (c.chat.snapshot)();
+                    !saved.tabs.iter().any(|tab| tab.id == c.id)
+                        && t.agent_id.is_none() && t.messages.is_empty() && t.draft.is_empty()
+                })
+                .cloned()
+                .collect();
+            if existing.len() - empty.len() + missing > 8 {
+                return Err("No se abrió el espacio: cierra algún chat para respetar el máximo de ocho, sin perder conversaciones.".into());
+            }
+            drop(existing);
+            if !saved.tabs.is_empty() {
+                first.set(false);
+                for c in empty {
+                    if let Some(index) = n.page_num(&c.page) {
+                        n.remove_page(Some(index));
+                    }
+                    chats.borrow_mut().retain(|v| v.id != c.id);
+                }
+            }
+            let mut selection = None;
+            for (index, tab) in saved.tabs.iter().enumerate() {
+                let existing = chats.borrow().iter().find(|c| c.id == tab.id).cloned();
+                let chat = if let Some(c) = existing {
+                    c
+                } else {
+                    let process = Rc::new(Process {
+                        bridge: root.bridge.clone(),
+                        native: RefCell::new(None),
+                        children: RefCell::new(Vec::new()),
+                    });
+                    let mut c = conversation(&state, process.clone());
+                    Rc::get_mut(&mut c).expect("new conversation").id = tab.id.clone();
+                    c.label.set_text(&tab.title);
+                    *c.agent_id.borrow_mut() = tab.agent_id.clone();
+                    (c.chat.restore)(tab);
+                    let label = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                    label.append(&c.label);
+                    let close = icon_button("window-close-symbolic", "Cerrar este chat");
+                    close.set_widget_name("workspace-close-chat");
+                    label.append(&close);
+                    let page = c.page.downgrade();
+                    let weak_n = n.downgrade();
+                    let close_chats = chats.clone();
+                    let close_root = root.clone();
+                    let p = process.clone();
+                    let cleanup = c.chat.close.clone();
+                    let active_close = active.clone();
+                    let state_close = Rc::downgrade(&state);
+                    let login_blank = go.clone();
+                    close.connect_clicked(move |_| {
+                        if let (Some(n), Some(page)) = (weak_n.upgrade(), page.upgrade()) {
+                            cleanup();
+                            p.shutdown();
+                            close_chats.borrow_mut().retain(|c| c.page != page);
+                            close_root
+                                .children
+                                .borrow_mut()
+                                .retain(|c| !Rc::ptr_eq(c, &p));
+                            if let Some(i) = n.page_num(&page) {
+                                n.remove_page(Some(i));
+                            }
+                            if n.n_pages() == 0
+                                && let Some(state) = state_close.upgrade()
+                            {
+                                let p = Rc::new(Process {
+                                    bridge: close_root.bridge.clone(),
+                                    native: RefCell::new(None),
+                                    children: RefCell::new(Vec::new()),
+                                });
+                                let blank = conversation(&state, p.clone());
+                                let go = login_blank.clone();
+                                blank.chat.login.connect_clicked(move |_| go(true));
+                                close_root.children.borrow_mut().push(p);
+                                close_chats.borrow_mut().push(blank.clone());
+                                *active_close.borrow_mut() = blank.clone();
+                                n.append_page(&blank.page, Some(&blank.label));
+                            }
+                        }
+                    });
+                    let go = go.clone();
+                    c.chat.login.connect_clicked(move |_| go(true));
+                    root.children.borrow_mut().push(process);
+                    chats.borrow_mut().push(c.clone());
+                    // Add to the collection before append_page emits switch-page.
+                    n.append_page(&c.page, Some(&label));
+                    c
+                };
+                if index == saved.selected {
+                    selection = Some(chat.page.clone());
+                }
+            }
+            if let Some(page) = selection {
+                n.set_current_page(n.page_num(&page));
+            }
+            if let Some(side) = side.upgrade() {
+                if saved.visible {
+                    side.set_visible(true);
+                }
+            }
+            Ok(())
+        })
+    };
+    *state.ai_workspace.borrow_mut() = Some(WorkspaceChats { capture, restore });
     let go = launch.clone();
     side.connect_visible_notify(move |side| {
         if side.is_visible()

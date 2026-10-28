@@ -273,6 +273,7 @@ def check_codex_chat(approval=False):
             assert "NEXUTERM_SMOKE_CODEX_APPROVAL_REJECTED" in logs, logs
         else:
             assert "NEXUTERM_SMOKE_CODEX_NATIVE_OK" in logs, logs
+            assert "NEXUTERM_SMOKE_CHAT_SNAPSHOT_OK" in logs, logs
         requests = [json.loads(line) for line in (directory / "protocol.jsonl").read_text().splitlines()]
         turn = next(r for r in requests if r.get("method") == "turn/start")
         assert turn["params"]["model"] == "fixture-model"

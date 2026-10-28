@@ -31,6 +31,7 @@ pub enum Event {
     History(Vec<Value>),
     Models(Vec<Value>),
     Resumed(Value),
+    Session(String),
     Status(String),
     Delta {
         item: String,
@@ -484,11 +485,13 @@ async fn run(
                     }
                     "thread/resume" => {
                         thread=result["thread"]["id"].as_str().ok_or(())?.into();
+                        events.send(Event::Session(thread.clone())).await.map_err(|_| ())?;
                         busy.store(false, Ordering::Relaxed);
                         events.send(Event::Resumed(result["thread"].clone())).await.map_err(|_| ())?;
                     }
                     "thread/start" => {
                         thread=result["thread"]["id"].as_str().ok_or(())?.into();
+                        events.send(Event::Session(thread.clone())).await.map_err(|_| ())?;
                         if let Some(text)=queued.take() { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; } else { busy.store(false,Ordering::Relaxed); }
                     }
                     "turn/start" => {

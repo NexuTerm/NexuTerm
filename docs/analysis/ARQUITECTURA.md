@@ -47,13 +47,22 @@ Se conservan propietario/grupo/permisos POSIX, no se garantizan ACL ni atributos
 extendidos. Los borradores recuperados requieren vinculación explícita al mismo
 destino y comparación de la huella original antes de habilitar Guardar.
 
-
 Los espacios conservan referencias de documento por UUID y origen, con los
 borradores en el almacén privado de recuperación. Antes de guardar se conservan
 las ediciones pendientes; un fallo evita sustituir el espacio anterior. Se abren
 los documentos en su posición, reutilizando los editores vivos por identidad.
 Los documentos SSH limpios esperan una acción explícita y una sesión existente;
 los borradores remotos pueden recuperarse sin red.
+
+La paleta de IA expone captura/restauración al gestor de espacios. El JSON añade
+un bloque opcional `chats` compatible con los espacios anteriores, con identidades
+UUID, metadatos de perfil/modelo/carpeta y copias acotadas de los mensajes visibles
+y del borrador. La restauración crea vistas sin cliente ni credenciales y reutiliza
+las identidades vivas; comprueba la capacidad antes de tocar la estructura.
+Codex publica la identidad nativa al crear o reanudar una conversación. La acción
+explícita de reanudación usa esa referencia y bloquea el envío hasta recibir
+`Resumed`; la copia local permanece si el proveedor falla. API/ACP no reanudan
+contexto en esta entrega. No se serializan concesiones ni peticiones de aprobación.
 
 ## Configuración y credenciales
 
