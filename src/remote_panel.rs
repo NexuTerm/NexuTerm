@@ -58,12 +58,24 @@ impl Panel {
             true,
         );
     }
+    pub fn workspace_directory(&self, connection: &Arc<SshConnection>) -> Option<PathBuf> {
+        self.connection.borrow().as_ref().filter(|current| Arc::ptr_eq(current, connection))
+            .map(|_| self.current.borrow().clone()).filter(|path| path.is_absolute())
+    }
     pub fn new(
         state: &Rc<State>,
         window: &gtk::ApplicationWindow,
         connection: Arc<SshConnection>,
     ) -> Rc<Self> {
-        let panel = Self::with_client(state, window, Client::start(connection.clone()));
+        Self::new_in_directory(state, window, connection, PathBuf::from("."))
+    }
+    pub fn new_in_directory(
+        state: &Rc<State>,
+        window: &gtk::ApplicationWindow,
+        connection: Arc<SshConnection>,
+        directory: PathBuf,
+    ) -> Rc<Self> {
+        let panel = Self::with_client_directory(state, window, Client::start(connection.clone()), directory);
         *panel.connection.borrow_mut() = Some(connection);
         panel
     }
@@ -71,6 +83,14 @@ impl Panel {
         state: &Rc<State>,
         window: &gtk::ApplicationWindow,
         client: Client,
+    ) -> Rc<Self> {
+        Self::with_client_directory(state, window, client, PathBuf::from("."))
+    }
+    fn with_client_directory(
+        state: &Rc<State>,
+        window: &gtk::ApplicationWindow,
+        client: Client,
+        directory: PathBuf,
     ) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 8);
         widget.add_css_class("nexuterm-section");
@@ -326,7 +346,7 @@ impl Panel {
             panel.navigate(PathBuf::from(path).parent().unwrap().to_path_buf());
             return panel;
         }
-        panel.navigate(".".into());
+        panel.navigate(directory);
         panel
     }
     pub fn stop(&self) {

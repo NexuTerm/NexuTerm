@@ -38,6 +38,10 @@ pub struct State {
     pub operations: RefCell<Vec<glib::WeakRef<gio::Cancellable>>>,
     pub desktops: RefCell<Vec<std::sync::Weak<nexuterm::desktop::Desktop>>>,
     pub sftp_masters: RefCell<Vec<std::sync::Weak<crate::sftp_session::Master>>>,
+    workspace_placeholders: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Target)>>,
+    workspace_manager: RefCell<glib::WeakRef<gtk::Window>>,
+    workspace_documents: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Layout)>>,
+    workspace_panels: RefCell<Vec<(glib::WeakRef<gtk::Widget>, Rc<crate::remote_panel::Panel>)>>,
     pub(crate) recoveries: RefCell<Vec<Weak<crate::recovery_ui::Tracker>>>,
     pub(crate) recovery_manager: RefCell<glib::WeakRef<gtk::Window>>,
     pub(crate) recovery_closing: Cell<bool>,
@@ -58,6 +62,8 @@ struct Session {
 
 #[path = "actions.rs"]
 mod actions;
+#[path = "workspace_ui.rs"]
+mod workspace_ui;
 #[path="ai_terminals.rs"]
 mod ai_terminals;
 #[path = "ai_panel.rs"]
@@ -318,6 +324,10 @@ pub fn build(app: &gtk::Application) {
         operations: RefCell::new(Vec::new()),
         desktops: RefCell::new(Vec::new()),
         sftp_masters: RefCell::new(Vec::new()),
+        workspace_placeholders: RefCell::new(Vec::new()),
+        workspace_manager: RefCell::new(glib::WeakRef::new()),
+        workspace_documents: RefCell::new(Vec::new()),
+        workspace_panels: RefCell::new(Vec::new()),
         recoveries: RefCell::new(Vec::new()),
         recovery_manager: RefCell::new(glib::WeakRef::new()),
         recovery_closing: Cell::new(false),
@@ -463,6 +473,14 @@ pub fn build(app: &gtk::Application) {
     crate::recovery_ui::offer(&state, &window);
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_RECOVERY").is_some() { crate::recovery_ui::smoke_start(&state, &window); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_WORKSPACES").is_some() {
+        workspace_ui::smoke(&state, &window);
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_DOCUMENTS").is_some() {
+        workspace_ui::smoke_documents(&state, &window);
+    }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some() {
         let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
@@ -832,6 +850,17 @@ fn terminal_in(
     container: Option<&gtk::Box>,
     connection: Option<std::sync::Arc<nexuterm::ssh::SshConnection>>,
 ) {
+    terminal_in_directory(state, title, spec, container, connection, None);
+}
+
+fn terminal_in_directory(
+    state: &Rc<State>,
+    title: &str,
+    spec: connection::CommandSpec,
+    container: Option<&gtk::Box>,
+    connection: Option<std::sync::Arc<nexuterm::ssh::SshConnection>>,
+    directory: Option<PathBuf>,
+) {
     let term = vte4::Terminal::new();
     crate::terminal_colors::bind(&term);
     term.set_scrollback_lines(state.config.borrow().preferences.scrollback.into());
@@ -978,7 +1007,7 @@ fn terminal_in(
         let h = handle.clone();
         term.spawn_async(
             vte4::PtyFlags::DEFAULT,
-            None,
+            directory.as_ref().and_then(|path| path.to_str()),
             &argv,
             &["TERM=xterm-256color"],
             glib::SpawnFlags::SEARCH_PATH,

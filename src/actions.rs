@@ -41,6 +41,7 @@ pub(super) fn install_actions(
             "Conexiones",
             vec![
                 ("Administrar sesiones…", "sessions"),
+                ("Espacios de trabajo…", "workspaces"),
             ],
         ),
         (
@@ -79,6 +80,7 @@ pub(super) fn install_actions(
         "connections",
         "local-files",
         "sessions",
+        "workspaces",
         "new-connection",
         "new-terminal",
         "open-file",
@@ -125,6 +127,7 @@ pub(super) fn install_actions(
                     }
                 }
                 "sessions" => sessions::show(&s, &w),
+                "workspaces" => workspace_ui::show(&s, &w),
                 "new-connection" => profile_dialog(&s, &w, None),
                 "new-terminal" => local_terminal(&s),
                 "open-file" => crate::files::choose_editor(&s, &w),

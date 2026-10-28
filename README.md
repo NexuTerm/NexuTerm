@@ -44,6 +44,70 @@ En **Preferencias** puedes elegir abrir los archivos del explorador con la aplic
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
 
+## Espacios de trabajo
+
+En **Menú → Conexiones → Espacios de trabajo…** puedes guardar las pestañas de
+terminal y editor actuales, su orden y selección, divisiones y proporciones,
+carpeta de cada terminal local, perfiles SSH referenciados, rutas del explorador
+SSH, documentos, borradores, chats, visibilidad de los laterales y notas. **Nuevo** prepara otro espacio; **Guardar pestañas actuales**
+crea o actualiza el seleccionado. **Guardar nombre y notas** conserva la
+disposición guardada. La eliminación pide confirmación y no borra archivos del
+proyecto.
+
+**Abrir** añade las pestañas sin cerrar el trabajo existente. Los paneles de
+terminal se restauran desconectados: pulsa **Abrir terminal** o **Conectar** en
+cada uno.
+No se reproduce el contenido del terminal ni sus comandos anteriores; el shell
+local comienza en la carpeta guardada, si sigue disponible. SSH reutiliza el
+perfil actual y su autenticación habitual; no conserva contraseñas ni sockets.
+Una carpeta local ausente o un perfil eliminado no se sustituyen por otro destino.
+
+El almacenamiento está separado de `sessions.json`, en
+`$XDG_DATA_HOME/nexuterm/workspaces/workspaces.json` (por defecto
+`~/.local/share/nexuterm/workspaces/workspaces.json`), con directorio 0700,
+archivo 0600 y reemplazo atómico. Un archivo dañado o con una versión desconocida
+se conserva y bloquea la gestión hasta que se resuelva el error.
+
+Los documentos se identifican por editor, con su origen y la referencia a su
+borrador. Al guardar el espacio se conservan antes los borradores modificados;
+si falla esa escritura, no se sustituye el espacio anterior. La escritura del
+espacio se realiza en segundo plano y se impiden operaciones simultáneas en ese
+diálogo. **Guardar nombre y notas** no altera sus documentos ni disposición.
+
+Al abrir un espacio:
+
+- Los documentos locales limpios se abren con el contenido actual del original.
+- Si existe un borrador de ese editor, se recupera su texto como modificado,
+  incluso si el original cambió o desapareció. El guardado mantiene las
+  comprobaciones de versión descritas en la sección de recuperación.
+- Los borradores SSH se recuperan sin conexión. Un documento SSH limpio espera
+  **Abrir original**, que requiere una terminal ya autenticada del mismo perfil
+  y destino; no inicia otra conexión.
+- Los documentos nuevos se colocan en el orden guardado y se mantiene la pestaña
+  seleccionada. Si ya está abierto el mismo editor, se reutiliza conservando su
+  posición y sus cambios actuales, sin sustituirlos por un borrador antiguo.
+- Si falta un borrador que estaba pendiente, se conserva un aviso y se ofrece
+  **Abrir original** expresamente. Puede ocurrir si después de guardar el espacio
+  se guardó o descartó ese borrador. No se presenta el original como texto
+  recuperado ni se recrean automáticamente archivos ausentes.
+- Un borrador dañado, desconocido o de otro origen se conserva sin sobrescribir.
+  Abrir su original crea otro editor independiente, de modo que cerrarlo no
+  elimina el registro que falló.
+
+El espacio conserva referencias al borrador actual de cada editor; no duplica su
+texto ni crea versiones congeladas del contenido. El borrado del espacio no
+elimina documentos, originales o borradores. Se siguen admitiendo los espacios
+anteriores de terminales.
+
+Chats, pestañas FTP/SFTP y escritorios remotos, foco, zoom, scrollback y recuperación automática de estructura siguen pendientes.
+
+Prueba aislada de persistencia y restauración entre procesos:
+
+```bash
+python3 lab/check_workspaces.py
+python3 lab/check_workspace_documents.py
+```
+
 ## Recuperación de documentos
 
 El editor conserva automáticamente los documentos modificados en

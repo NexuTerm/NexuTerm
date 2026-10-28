@@ -28,3 +28,4 @@ pub mod ai_usage;
 pub mod approval_grants;
 
 pub mod recovery;
+pub mod workspaces;

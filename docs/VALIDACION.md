@@ -6,6 +6,84 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Documentos y borradores asociados a espacios — 27 de octubre de 2026
+
+- El espacio conserva la identidad de cada editor, su origen y la referencia al
+  borrador actual; no duplica el texto. Antes de guardar se conservan los
+  borradores abiertos modificados. Un fallo en esa captura evita sustituir el
+  espacio anterior. La escritura se realiza en segundo plano y el diálogo impide
+  guardar, abrir o eliminar simultáneamente.
+- La restauración respeta orden y selección para los documentos recuperados;
+  los editores ya abiertos conservan posición y cambios. Los documentos locales
+  limpios leen el original actual; los borradores SSH se recuperan sin red y los
+  documentos SSH limpios esperan una apertura expresa sobre una sesión existente.
+- `cargo build --locked --offline --jobs 2`: correcto, sin advertencias.
+  `cargo test --locked --offline --jobs 2`: 69 pruebas correctas; cuatro
+  integraciones ignoradas por defecto. Los casos nuevos validan referencias,
+  identidad frente a cambios de versión/destino, UUID, duplicados y rechazo de
+  documentos dentro de divisiones de terminal; los datos inválidos no sustituyen
+  el archivo anterior.
+- `python3 lab/check_workspace_documents.py`: siete escenarios correctos con
+  configuración y datos ficticios aislados. Incluye guardado seguido de SIGKILL,
+  reapertura con orden/selección, reapertura sin duplicar editores ni perder una
+  edición posterior, borrador ausente, original eliminado, registro remoto dañado,
+  registro local dañado y fallo de almacenamiento. Abrir y cerrar el original
+  del registro local dañado conserva intacto ese registro.
+- `python3 lab/check_remote_editor.py`: integración SSH real y cinco recorridos
+  GTK correctos. El caso nuevo abre un documento SSH limpio desde el espacio,
+  requiere una acción explícita, lee el original actual sin modificarlo, conserva
+  su posición y no crea otra sesión ni duplica el editor al reabrir el espacio.
+  Esta prueba no restaura una terminal SSH del espacio: la conexión de laboratorio
+  ya existe antes de abrir el documento.
+- `python3 lab/check_workspaces.py`: cuatro escenarios previos correctos.
+  `python3 lab/check_recovery.py`: ocho escenarios previos correctos.
+  Captura de la reapertura de documentos revisada visualmente.
+- Se detectó un problema del laboratorio: el primer recorrido de redimensionado
+  del explorador heredó Wayland aunque se había arrancado Xvfb. La consulta del
+  display confirmó `GdkWaylandDisplay`; fijando `GDK_BACKEND=x11` pasaron las mismas
+  aserciones. Los scripts de esta entrega que requieren Xvfb ahora fijan X11 en
+  el proceso de prueba; no se cambia el backend de la aplicación normal. Se
+  repitieron los recorridos de documentos, recuperación y SSH en ese entorno.
+- `python3 lab/check_local_explorer.py`: tres recorridos correctos con X11.
+  `python3 lab/check_ui.py menus`: correcto.
+  `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
+  Formato de los módulos de espacios/recuperación y `git diff --check`: correctos.
+  Clippy sigue sin estar instalado. La acción Guardar rechaza versiones ausentes
+  también si se invoca directamente, sin depender solo del estado del botón.
+- Continúan pendientes el historial de chats, las pestañas FTP/SFTP y de
+  escritorio remoto, el resto de estado visual y la recuperación automática de
+  estructura. No se han hecho commits ni push ni generado un paquete de release.
+
+## Primera entrega de espacios de trabajo — 26 de octubre de 2026
+
+- Antes de implementar se publicó `a443439` en `origin/main`: corrección del
+  desplazamiento que cubría el botón de copiar. Compilación, suite Rust,
+  las dos pruebas gráficas de copia (Codex/ACP) y cinco pruebas de empaquetado
+  correctas; `HEAD...origin/main` quedó en `0 0` antes de los cambios nuevos.
+- Toolchain de esta ejecución: Rust 1.93.1 instalado por REA, GTK 4.22.4,
+  libadwaita 1.9.1 y VTE 0.84.0. No se actualizaron dependencias ni lockfile.
+- `cargo build --locked --offline --jobs 2`: correcto; binario de desarrollo
+  reconstruido. `cargo test --locked --offline --jobs 2`: 63 pruebas correctas,
+  cuatro integraciones ignoradas por defecto.
+- `python3 lab/check_workspaces.py`: cuatro procesos GTK aislados correctos:
+  guardar/renombrar, reapertura, carpeta ausente y perfil eliminado. Verificados
+  notas, permisos privados, divisiones anidadas, conservación de pestañas,
+  ausencia de ejecución automática y carpeta del proceso iniciado expresamente.
+  Capturas de diálogo y disposición revisadas en `artifacts/workspaces-*.png`.
+- `python3 lab/check_ui.py menus` y `close-splits`: correctos.
+- `python3 lab/check_remote_editor.py`: integración SSH/SCP real correcta y
+  recorridos GTK oscuro/claro correctos, con servidor y claves desechables.
+  Es una regresión del editor y navegador, no una prueba de reconexión desde
+  un espacio restaurado.
+- `python3 -m unittest discover -s tests -p test_release.py`: cinco correctas.
+  Formato de los módulos Rust nuevos y `git diff --check`: correctos.
+- Xvfb se ejecutó desde la instalación local de laboratorio. Clippy no está
+  instalado en este toolchain; su comprobación no pudo ejecutarse. No se generó
+  un paquete de release ni se validaron otras distribuciones.
+- Esta entrega no cierra la fase de recuperación completa: documentos pendientes,
+  historial de chats y demás fases continúan en [MEJORAS.md](MEJORAS.md).
+
+
 ## Vinculación de borradores SSH y guardado atómico — 27 de octubre de 2026
 
 - Los borradores nuevos conservan la huella SHA-256 del contenido original.

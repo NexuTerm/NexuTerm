@@ -58,6 +58,7 @@ def main():
                 gui(base, env, "light")
                 gui_recovery(base, env, conflict=False)
                 gui_recovery(base, env, conflict=True)
+                gui_workspace_document(base, env)
             finally:
                 server.terminate()
                 server.wait(timeout=5)
@@ -120,6 +121,34 @@ def gui_recovery(base, env, conflict):
     else:
         assert stored["text"] == changes
     print("PASS GTK " + mode + ": explicit authenticated binding, guarded save and durable baseline")
+
+
+def gui_workspace_document(base, env):
+    remote = base / "remote/workspace-clean.txt"
+    remote.write_text("Documento SSH actualizado\n")
+    destination = hashlib.sha256(json.dumps(["127.0.0.1", int(env["NEXUTERM_REMOTE_FIXTURE_PORT"]), env["NEXUTERM_REMOTE_FIXTURE_USER"]], separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    source = dict(kind="Remote", profile_id="remote-editor-fixture", host="127.0.0.1", destination=destination, path=str(remote), fingerprint=hashlib.sha256(b"older contents").hexdigest())
+    data = base / "workspace-document/data"
+    directory = data / "nexuterm/workspaces"
+    directory.mkdir(parents=True, mode=0o700)
+    layout = dict(kind="Document", id=str(uuid.uuid4()), source=source, had_draft=False)
+    workspace = dict(id="ssh-workspace", name="Documento SSH", notes="", tabs=[dict(title="Documento SSH", layout=layout)], selected=0, directory=None, sidebar_visible=True)
+    path = directory / "workspaces.json"
+    path.write_text(json.dumps(dict(version=1, workspaces=[workspace]))); path.chmod(0o600)
+    config = base / "workspace-document/config/nexuterm"
+    config.mkdir(parents=True)
+    (config / "sessions.json").write_text(json.dumps(dict(version=2, profiles=[])))
+    env = {k: v for k, v in env.items() if not k.startswith("NEXUTERM_SMOKE")}
+    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(data), GSK_RENDERER="cairo", GDK_BACKEND="x11", NEXUTERM_SMOKE_TEST="1", NEXUTERM_SMOKE_REMOTE_REBIND="1", NEXUTERM_SMOKE_WORKSPACE_DOCUMENTS="remote-clean", NEXUTERM_DOCUMENT_FIXTURE=str(base))
+    artifacts = ROOT / "artifacts"
+    env["NEXUTERM_SCREENSHOT"] = str(artifacts / "workspace-document-ssh.png")
+    result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], cwd=base, env=env, capture_output=True, text=True, timeout=25)
+    (artifacts / "workspace-document-ssh.log").write_text(result.stdout + result.stderr)
+    assert result.returncode == 0 and "CRITICAL" not in result.stderr, result.stderr
+    assert "NEXUTERM_SMOKE_DOCUMENTS_REMOTE_CLEAN_OK" in result.stderr, result.stderr
+    assert remote.read_text() == "Documento SSH actualizado\n"
+    assert not list((data / "nexuterm/recovery").glob("*.json"))
+    print("PASS GTK workspace SSH document: explicit existing-session open, current original, stable position and no duplicate")
 
 
 if __name__ == "__main__":

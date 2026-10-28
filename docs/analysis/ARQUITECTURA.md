@@ -48,6 +48,13 @@ extendidos. Los borradores recuperados requieren vinculación explícita al mism
 destino y comparación de la huella original antes de habilitar Guardar.
 
 
+Los espacios conservan referencias de documento por UUID y origen, con los
+borradores en el almacén privado de recuperación. Antes de guardar se conservan
+las ediciones pendientes; un fallo evita sustituir el espacio anterior. Se abren
+los documentos en su posición, reutilizando los editores vivos por identidad.
+Los documentos SSH limpios esperan una acción explícita y una sesión existente;
+los borradores remotos pueden recuperarse sin red.
+
 ## Configuración y credenciales
 
 La configuración se guarda en `$XDG_CONFIG_HOME/nexuterm/sessions.json`, con
