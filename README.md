@@ -6,6 +6,7 @@ Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobacion
 ## Primera versión
 
 - Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas compactas y reordenables.
+- Menús contextuales con clic derecho o Mayús+F10: abrir, copiar/pegar y operaciones básicas en los exploradores; copiar, pegar, seleccionar y buscar en terminales locales y remotas; copiar selección, mensaje o conversación en los chats de IA. El cuadro de escritura conserva el menú nativo de edición de GTK.
 - Explorador local predeterminado con un tercio del área disponible y proporción conservada al redimensionar (separador ajustable), vista de detalles Nombre/Tipo/Tamaño/Permisos y filas alternas grises adaptadas al tema. Los paneles se alinean arriba y abajo, con 3 px entre ellos. La navegación y apertura están integradas en su cabecera, sin pie permanente de paginación o contador. Doble clic o Intro navega por carpetas y abre archivos. Sigue los cambios de carpeta de la terminal local activa mediante VTE o `/proc`; navegar por el explorador no ejecuta comandos en el shell. Las conexiones guardadas siguen disponibles en **Administrar sesiones**.
 - Lateral ocultable con F9. Preferencias persistentes de tema, fuente, scrollback y visibilidad inicial del lateral.
 - Divisiones horizontales y verticales anidadas, búsqueda literal en terminal, zoom y herramientas en la cabecera de la terminal. Reconexión, desconexión y archivos remotos están en **Conexiones**.
@@ -13,7 +14,7 @@ Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobacion
 - Paletas de terminal adaptadas al tema: gris carbón en oscuro y marfil en claro, texto, cursor y selección coordinados y colores ANSI suaves. Se actualizan también en terminales abiertas al cambiar el tema del sistema. Las aplicaciones que fijan sus propios colores RGB conservan esos colores.
 - Terminal local mediante GTK4/VTE: PTY, Unicode, redimensionado y scrollback de 10.000 líneas.
 - Ventana **Administrar sesiones** (Ctrl+Mayús+S): crear, editar, duplicar, eliminar con confirmación, buscar, agrupar y marcar favoritos.
-- FTP y SFTP con explorador gráfico de dos paneles, local y remoto: navegación, subida, descarga, progreso y cancelación. FTP configura usuario y contraseña antes de conectar; puede guardarse en el llavero o mantenerse durante la ejecución. FTP y Telnet transmiten sin cifrar.
+- FTP y SFTP con explorador remoto y el explorador local principal, sin duplicarlo: navegación, subida, descarga, progreso y cancelación. Selecciona archivos o carpetas locales y pulsa Subir; las descargas usan la carpeta del explorador principal. Puedes arrastrar la selección entre ambos exploradores o usar Copiar/Pegar (Ctrl+C/Ctrl+V con el foco en la lista). La cola persistente permite pausar, cancelar y reintentar desde el inicio de cada archivo, sin sobrescribir destinos existentes. FTP configura usuario y contraseña antes de conectar; puede guardarse en el llavero o mantenerse durante la ejecución. FTP y Telnet transmiten sin cifrar.
 - Telnet abre una terminal integrada.
 - SFTP independiente utiliza OpenSSH con clave, agente o contraseña solicitada en una ventana gráfica. No abre un shell remoto.
 - SSH mediante OpenSSH con usuario, puerto, clave y salto; contraseñas solicitadas en el PTY.
@@ -44,6 +45,78 @@ En **Preferencias** puedes elegir abrir los archivos del explorador con la aplic
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
 
+## Ejecución supervisada
+
+En **Menú → Vista y herramientas → Ejecución supervisada…** prepara un comando,
+selecciona **Este equipo** o una sesión SSH abierta y escribe la carpeta absoluta.
+**Actualizar destinos** recoge las sesiones SSH abiertas después de mostrar la
+ventana. Cambiar de destino vacía la carpeta para que la indiques expresamente.
+**Revisar ejecución…** muestra solicitante, destino, carpeta, comando, límite de
+tiempo y conservación del historial; **Aprobar y ejecutar** autoriza esa ejecución
+concreta. Rechazar o cerrar la aprobación no inicia ningún proceso.
+
+Los comandos se ejecutan mediante `/bin/sh`, con entrada estándar cerrada y
+stdout/stderr separados. En local se crea un proceso y grupo propios, con la
+carpeta aprobada y el entorno exportado de NexuTerm. En SSH se utiliza un canal
+independiente de una conexión autenticada ya abierta; requiere `/bin/sh` remoto y
+no inicia otra autenticación si desaparece la conexión compartida. El shell
+interactivo conserva su entrada, carpeta y variables privadas.
+
+El tiempo inicial es **60 segundos**, configurable entre 1 y 120. Se capturan hasta
+**4 MiB entre stdout y stderr**, drenando ambos flujos aunque se alcance el límite.
+La vista muestra hasta 128 KiB por flujo; **Exportar salida…** conserva todos los
+bytes capturados en un archivo local nuevo, con cabecera de estado y separación de
+flujos. No reemplaza archivos existentes. El resultado indica estado, duración,
+código de retorno cuando se confirma y truncamiento de captura. Un retorno distinto
+de cero se muestra como finalización con error.
+
+**Cancelar proceso seleccionado** solicita la terminación del grupo local. En SSH,
+la cancelación cierra el cliente/canal, pero no garantiza detener el programa del
+servidor. Cancelación, timeout, pérdida del canal o retorno SSH ambiguo 255 producen
+**Resultado desconocido** cuando no puede confirmarse el resultado remoto, sin
+inventar un retorno. Comprueba el servidor antes de repetir esa operación. Los
+procesos que se independicen expresamente de su grupo local requieren su propio
+control de ciclo de vida.
+
+La ventana conserva hasta ocho resultados en memoria y admite un máximo de cuatro
+ejecuciones simultáneas en la aplicación. **Retirar salida de memoria…**, con
+confirmación, libera un resultado terminado sin borrar su registro en disco. Las
+salidas cuyo historial haya fallado se retienen hasta retirarlas explícitamente;
+se pueden exportar antes de hacerlo. Cerrar la ventana de ejecuciones permite
+consultarla de nuevo sin cancelar los procesos. Cerrar NexuTerm confirma la
+cancelación de los activos y espera al resultado y a su escritura; si no se pudo
+conservar el historial, permite cancelar el cierre para exportar o cerrar
+expresamente sin ese historial.
+
+**Conservar historial local**, activado inicialmente, guarda comando, destino,
+carpeta, estado y salida en `$XDG_DATA_HOME/nexuterm/executions/`, con directorio
+0700 y archivos 0600. Se prepara el registro antes de ejecutar y se publican
+capturas periódicas y finales mediante reemplazo atómico y fsync. Hay un límite de
+**1 GiB y 1000 registros/archivos de historial**, reservando espacio para la captura
+máxima de cada ejecución; los temporales incompletos también cuentan. Al faltar
+cuota o fallar la preparación no se ejecuta el comando. No se borran registros
+antiguos automáticamente. **Historial…** permite consultar, exportar y eliminar
+registros confirmando la eliminación, incluso si un registro está dañado. No se
+elimina un registro todavía activo. Desmarca la conservación antes de aprobar para
+mantener esa ejecución únicamente en memoria; no se serializa el entorno ni se
+almacenan credenciales de conexión.
+
+Tras una terminación inesperada se consulta la última captura publicada. Un
+registro sin final confirmado se presenta como desconocido; abrir el historial o
+recuperar un espacio no repite ni reanuda comandos. Si falla una escritura durante
+la ejecución, se avisa y se mantiene la captura acotada en memoria para exportarla;
+la escritura final puede confirmar el registro si el almacenamiento se recupera.
+
+Los agentes con acceso MCP a terminales tienen también **`supervised_targets`** y
+**`supervised_execute`**. La segunda exige `target_id`, `directory` absoluta y
+`command`; `timeout_seconds` y `keep_history` son opcionales. Siempre solicita una
+aprobación nueva, sin reutilizar concesiones de otros tipos de operación. Una
+solicitud caducada antes de aprobar no ejecuta nada; si el solicitante se desconecta
+con el proceso activo, se solicita su cancelación. La respuesta incluye estado,
+duración, retorno opcional, últimos 4 KiB por flujo de la captura conservada e
+indicadores separados de truncamiento de captura/respuesta y de conservación del
+historial. `terminal_execute` conserva su comportamiento de envío al shell abierto.
+
 ## Espacios de trabajo
 
 En **Menú → Conexiones → Espacios de trabajo…** puedes guardar las pestañas de
@@ -61,6 +134,38 @@ No se reproduce el contenido del terminal ni sus comandos anteriores; el shell
 local comienza en la carpeta guardada, si sigue disponible. SSH reutiliza el
 perfil actual y su autenticación habitual; no conserva contraseñas ni sockets.
 Una carpeta local ausente o un perfil eliminado no se sustituyen por otro destino.
+
+Las pestañas FTP/SFTP también conservan su orden, perfil, protocolo y última
+carpeta remota absoluta conocida. Se recuperan desconectadas y **Conectar** usa
+el perfil actual y su autenticación habitual. Un perfil eliminado o cuyo
+protocolo haya cambiado no se sustituye por otro. La pestaña conectada ocupa la
+posición de la recuperada y reutiliza el explorador local principal; no se
+guardan contraseñas, transferencias pendientes ni conexiones activas.
+
+Las pestañas RDP/VNC conservan su perfil, protocolo, orden y selección. Se
+recuperan desconectadas: **Abrir escritorio** muestra la interfaz habitual y
+**Conectar** inicia la conexión con las credenciales introducidas entonces.
+No se guardan contraseñas, imágenes del escritorio, entradas de teclado/ratón ni
+excepciones de confianza de certificados. Un perfil eliminado o que cambie de
+protocolo conserva un aviso sin abrir otro destino. Se mantienen las
+comprobaciones TLS y de certificados existentes de RDP.
+
+Cada panel de terminal conserva su zoom (entre 0,5 y 3) y el panel activo de
+la pestaña recuperada recibe el foco en su botón de apertura. El zoom se aplica
+al iniciar explícitamente esa terminal. Los chats conservan su posición relativa
+de lectura; las respuestas nuevas respetan esa posición si estás leyendo hacia
+arriba y siguen el final si ya estabas allí. Las capturas anteriores usan zoom
+normal y abren el chat al final. No se recupera el contenido ni el desplazamiento
+del terminal, porque no se reproduce su salida anterior.
+
+Los editores conservan el cursor, la selección y el desplazamiento vertical y
+horizontal. Se aplican después de cargar el texto, con posiciones acotadas al
+contenido actual; un editor ya abierto conserva su vista y sus cambios actuales.
+Los exploradores local, SSH y FTP/SFTP conservan ocultos, selección y
+posición de lectura después del listado. La selección se recupera únicamente si
+el nombre existe entre las entradas cargadas; no se abren archivos ni se recorren
+páginas adicionales automáticamente. Mientras una vista permanece oculta se
+conserva su desplazamiento pendiente hasta que vuelva a mostrarse.
 
 El almacenamiento está separado de `sessions.json`, en
 `$XDG_DATA_HOME/nexuterm/workspaces/workspaces.json` (por defecto
@@ -107,24 +212,73 @@ contenido actual. Si la suma supera ocho chats, se rechaza la apertura completa
 antes de añadir pestañas; hay que cerrar alguno primero. Un perfil eliminado no
 impide consultar su copia local.
 
-Cuando existe una referencia de conversación de Codex y sigue configurado su
-perfil, **Reanudar conversación de Codex** inicia el agente y solicita esa
-conversación expresamente, con permisos iniciales de solo lectura. Solo se
-habilita el envío cuando el proveedor confirma la reanudación. Un fallo conserva
-los mensajes locales y el borrador. API y ACP se recuperan como copias consultables:
-para una conversación nueva utiliza **+**, sin reenviar automáticamente el historial.
-No se guardan claves, permisos concedidos, procesos ni solicitudes de aprobación.
+La reanudación siempre es explícita y espera confirmación antes de permitir
+mensajes. Codex conserva su referencia nativa. Las API conservan el contexto del
+último intercambio completado, incluidos resultados de herramientas ya recibidos;
+restaurarlo no realiza peticiones al proveedor ni repite operaciones. El siguiente
+mensaje del usuario utiliza ese contexto con el perfil actual del mismo destino.
+Los agentes ACP utilizan `session/load` o `session/resume` únicamente si anuncian
+esa capacidad. La carga no crea otra sesión ni ejecuta herramientas reproducidas.
+Un fallo conserva la copia y permite **Reintentar reanudación**.
 
-Esta entrega conserva hasta los 128 mensajes visibles por chat y el borrador del
-editor; no es un archivo de todo el historial del proveedor. Los archivos adjuntos
-pendientes, el razonamiento seleccionado y el desplazamiento no se restauran.
-Los chats quedan incluidos en el JSON privado del espacio al guardarlo y en la
-copia automática de la sesión. Se mantienen los límites de ocho chats,
-64 KiB de borrador por chat y 16 MiB para el archivo completo; si se exceden se
-rechaza el guardado y se conserva el archivo anterior.
+Se recuperan las rutas de hasta 20 adjuntos pendientes y el razonamiento elegido.
+Restaurar rutas no lee archivos ni recrea los que falten. Tras enviar el mensaje se
+retiran los adjuntos pendientes como antes. El razonamiento se selecciona entre
+los valores que anuncia el proveedor; si ya no está disponible se usa Auto con
+aviso. Si el destino configurado cambió o faltan referencias antiguas, la copia
+permanece consultable y no se reenvía a otro proveedor. No se serializan claves,
+concesiones de permisos ni solicitudes de aprobación.
 
-Las pestañas de exploración FTP/SFTP y escritorio remoto siguen pendientes de
-integración, así como scrollback, zoom y panel enfocado. Los siguientes pasos están en
+El espacio y la copia de sesión conservan hasta 128 tarjetas visibles por chat y
+el borrador, con los límites de ocho chats, 64 KiB de borrador y 16 MiB por archivo
+de espacios. El contexto API recuperable admite hasta 2 MiB/129 entradas para
+conservar también la última respuesta; los límites de envío al proveedor siguen
+siendo 256 KiB/128 entradas por solicitud. La posición de lectura se conserva. El cliente nativo mantiene su límite de 128
+elementos por turno; si se supera, interrumpe con un aviso en el historial.
+
+Al abrir un chat se muestra **Chats recientes**, que ocupa toda el área de la
+conversación y mantiene el editor visible debajo. Los recientes pertenecen al
+perfil de agente seleccionado: Codex, GitHub y los demás perfiles conservan
+listas independientes. Seleccionar una conversación la abre y solicita su
+continuación en la misma pestaña; escribir desde recientes inicia una conversación
+nueva. El botón **Mostrar chats recientes** vuelve a esa vista y conserva el chat
+anterior. No crea otra pestaña. Si el agente está respondiendo, la respuesta
+termina en segundo plano; el editor y la selección de conversaciones esperan a
+que finalice, como el editor de la conversación. El historial nativo de Codex
+mantiene su paginación.
+
+Las referencias y el contexto de recientes se guardan junto al historial local,
+en copias privadas de hasta 16 MiB, con los últimos 128 mensajes, borrador,
+adjuntos y contexto recuperable. Comparten el límite global de 1 GiB/1000
+conversaciones con los JSONL. No se guardan claves ni autorizaciones. Los perfiles
+eliminados o cuyo destino haya cambiado no se sustituyen por otros. Restaurar un
+espacio de trabajo sigue dejando el chat desconectado hasta su reanudación explícita.
+
+El botón **Historial local completo** de la cabecera consulta todas las
+conversaciones archivadas, incluidas las cerradas. El archivo separado en
+`$XDG_DATA_HOME/nexuterm/chat-history/` conserva mensajes, fragmentos de respuestas
+y resultados visibles desde esta versión, aunque ya no estén entre las 128
+tarjetas. Se escribe por lotes en segundo plano, en archivos privados 0600 y
+directorio 0700. La vista pagina 25 mensajes y acota el texto mostrado; **Exportar
+JSONL…** conserva todas las entradas y fragmentos, sin reemplazar archivos
+existentes. El registro es un historial de texto, no una cola de acciones.
+
+El límite inicial global es 1 GiB y 1000 archivos de conversación, con entradas
+individuales de hasta 2 MiB y una cola acotada (64 entradas y 4 MiB pendientes por chat; importación inicial
+acotada a 16 MiB). El lector del agente espera cuando el disco va más lento.
+Al agotarse el espacio o fallar la
+escritura se avisa y se detiene la captura; no se eliminan datos antiguos ni se
+bloquea la conservación de documentos o de la copia de recuperación del chat.
+Puedes desactivar **Conservar historial completo de este chat** o **Borrar
+historial…**, con confirmación. Esa opción afecta al archivo completo; las copias
+de recuperación de los últimos mensajes y del borrador se gestionan aparte. Un
+historial borrado no se recrea por escrituras tardías; abre otro chat para iniciar
+otro registro. Las copias antiguas solo pueden aportar el texto y las referencias
+que realmente conservaron; no se inventa el contexto que faltaba.
+
+Las pestañas FTP/SFTP y RDP/VNC ya se integran en los espacios, junto con el zoom
+y el panel activo de terminal. No se conserva el scrollback de terminal ni se reconstruyen páginas de
+listado que aún no estén cargadas. Los siguientes pasos están en
 [la hoja de ruta](docs/MEJORAS.md).
 
 ## Recuperación automática de la sesión
@@ -170,6 +324,7 @@ cargo build --locked
 python3 lab/check_workspaces.py
 python3 lab/check_workspace_documents.py
 python3 lab/check_workspace_chats.py
+python3 lab/check_chat_state.py
 python3 lab/check_session_recovery.py
 ```
 
@@ -214,7 +369,9 @@ Los borradores SSH sobreviven a la pérdida de la copia temporal, la conexión o
 el perfil. Se recuperan sin conexión y permiten comparar o exportar una copia
 local. Para volver a guardar en el servidor, conecta una terminal SSH al mismo
 perfil y destino y pulsa **Vincular a SSH**. Se comprueba la huella SHA-256 del
-original capturada al editar; si cambió, no se vincula ni se sobrescribe.
+original capturada al editar; si cambió, el vínculo permite comparar, pero
+**Guardar** permanece bloqueado hasta revisar y aplicar una resolución. No se
+sobrescribe al vincular.
 Vincular conserva el texto del editor y no escribe en el servidor. **Guardar**
 vuelve a comprobar el original antes del reemplazo atómico; **Revalidar SSH**
 permite utilizar otra conexión autenticada del mismo destino si es necesario.
@@ -392,8 +549,10 @@ elimina al limpiar `target`. No modifica la configuración global del equipo.
 El idioma inicial es español. En **Configurar agentes de IA → General →
 Configurar dictado local…** puedes elegir detección automática, otro ejecutable
 o modelo. Si falta el motor, el micrófono abre ese mismo diálogo. La aplicación
-no descarga modelos automáticamente. Pulsa el micrófono para grabar y otra vez
-para terminar; el máximo es un minuto. El texto se añade al borrador para
+no descarga modelos automáticamente. Pulsa el micrófono para grabar: termina automáticamente tras aproximadamente
+1,5 segundos de silencio después de detectar voz. También puedes pulsarlo otra
+vez para terminar; el máximo es un minuto. Las grabaciones sin señal suficiente
+y las etiquetas de sonidos como `[Música]` no se añaden al borrador. El texto se añade al borrador para
 revisarlo antes de enviar y el audio temporal se elimina al terminar. El audio
 no se envía a una API. Tiny prioriza tamaño y recursos; puede cometer errores,
 especialmente con ruido o frases muy breves.
@@ -431,6 +590,22 @@ La comprobación GTK usa `xvfb-run` si existe o el `DISPLAY` actual y crea una s
 D-Bus independiente. Guarda capturas y logs en `artifacts/`.
 
 ## Compilar y ejecutar
+
+Desde el repositorio puedes recompilar con el script:
+
+```bash
+./recompilar.sh -r  # release
+./recompilar.sh -d  # debug
+```
+
+Elige una sola opción. El script funciona también desde otro directorio, conserva
+`Cargo.lock` y devuelve el error de Cargo si falla la compilación. Cargo debe estar
+en `PATH`; si falta, se reutiliza una instalación existente en `~/.cargo/bin` o
+en el entorno local de Rea, sin modificar la configuración global. También puedes
+indicar su ejecutable mediante `CARGO=/ruta/a/cargo`. Se respeta `CARGO_TARGET_DIR`
+si necesitas otra carpeta de compilación. Por defecto usa dos trabajos en paralelo;
+puedes ajustarlos con `CARGO_BUILD_JOBS`.
+
 
 Requisitos: Linux, Rust 1.92 o posterior, GTK >= 4.10, libadwaita >= 1.4 y VTE para GTK4 >= 0.70.
 El objetivo nativo inicial es Ubuntu 24.04+ y Debian 13+; se ha comprobado el entorno indicado en `docs/VALIDACION.md`.
@@ -471,7 +646,7 @@ sudo apt install ./dist/nexuterm_*.deb
 ```
 
 `make release` compila la versión optimizada y genera el `.deb` en `dist/`.
-APT instala OpenSSH, el cliente Telnet, el soporte FTP de GVfs y curl para Windows CE, un proveedor de llavero (GNOME Keyring o KeePassXC), LibVNCClient y las bibliotecas necesarias, incluidas sus
+APT instala OpenSSH, el cliente Telnet, el soporte FTP de GVfs y curl para subidas FTP y Windows CE, un proveedor de llavero (GNOME Keyring o KeePassXC), LibVNCClient y las bibliotecas necesarias, incluidas sus
 dependencias transitivas. `dpkg-shlibdeps` calcula las bibliotecas y versiones
 mínimas a partir del ejecutable; se respetan además los mínimos de GTK, VTE y libadwaita.
 No uses únicamente `dpkg -i`: no descarga las dependencias que falten.
@@ -541,6 +716,36 @@ reemplazo, el resultado se considera desconocido: comprueba el servidor antes de
 reintentar. Las transferencias normales del explorador mantienen sus límites y
 siguen rechazando sobrescrituras.
 
+### Comparar y resolver versiones
+
+**Comparar versiones…**, en la cabecera del editor, presenta el texto **Base**
+(al abrir o tras el último guardado), **Local** (borrador sin guardar) y
+**Original actual**, con las diferencias por líneas resaltadas. Un cuarto panel
+permite editar el resultado. Puedes escoger toda una versión o componer el texto
+manualmente; debes confirmar que lo has revisado antes de **Aplicar al borrador**.
+No se mezclan cambios ni se sobrescribe el servidor automáticamente.
+
+Aplicar vuelve a leer y comprobar el original comparado; si ha cambiado el texto,
+propietario, grupo, permisos o fecha de modificación, exige una comparación nueva.
+La aplicación solo actualiza el borrador y su base. Después pulsa **Guardar**, que
+repite la comprobación de versión y la publicación atómica. Cancelar mantiene el
+borrador y el original. Las comparaciones y la lectura SFTP se ejecutan fuera del
+hilo gráfico. También se admite el editor GIO cuando el destino aporta etag.
+
+Los borradores nuevos incluyen un campo opcional `base_text` en su JSON privado,
+con hasta 8 MiB adicionales para el texto base; el texto editado conserva su límite
+de 8 MiB. En SSH se valida que la base corresponda a la huella original guardada.
+Los borradores anteriores siguen siendo legibles: si no incluyen la base, se
+indica y se revisan las versiones disponibles sin inventarla. Para un borrador SSH
+vincula antes una sesión del mismo perfil/destino; si existe un conflicto, el
+vínculo queda limitado a revisión hasta aplicar una resolución explícita.
+
+El contraste detallado se acota a 200.000 líneas por versión y dos millones de
+celdas por pareja. Si se supera, se muestran los textos completos y se resaltan
+regiones más amplias, con aviso. El resultado sigue siendo manual y no se trunca.
+La comparación incluye los metadatos POSIX disponibles y el guardado los verifica;
+no sustituye una revisión de ACL o atributos que SFTP no expone.
+
 La operación sustituye el inodo y no actualiza otros enlaces duros al original.
 SFTP v3 no permite garantizar la conservación de ACL, atributos extendidos u otros
 metadatos no informados; la interfaz lo indica antes de guardar. Para archivos
@@ -559,9 +764,9 @@ una copia; descartar expresamente el documento retira también su borrador.
 - RDP y VNC se ajustan al área de la pestaña sin cambiar la resolución del servidor. No hay aún sincronización de portapapeles, audio ni configuración de certificados VNC personalizados. La compatibilidad con todos los servidores reales no está comprobada.
 - La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los protocolos de escritorio remoto.
 - No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares ni importación de perfiles de otras aplicaciones.
-- El explorador transfiere un archivo cada vez, no árboles de carpetas. No sigue enlaces simbólicos automáticamente. No sobrescribe archivos existentes y un error/cancelación puede dejar un destino parcial. Cancelar detiene nuevas solicitudes y espera la operación ya enviada; no revierte los bytes escritos. SFTP usa bloques de 64 KiB y los listados muestran hasta 200 entradas por página. El modo FTP Windows CE admite listados de hasta 8 MiB; comprueba que el destino remoto no exista antes de subir, pero FTP no garantiza exclusión frente a escrituras simultáneas de otros clientes.
+- El explorador admite selección múltiple (hasta 128 elementos) y árboles de hasta 512 operaciones/32 niveles; no sigue enlaces ni acepta archivos especiales. La cola es compartida por destino, privada y persistente (512 entradas, 4 MiB de estado). Al recuperar una cola no se conecta ni transfiere hasta pulsar Iniciar. Pausar espera al archivo actual; reintentar comienza ese archivo desde cero. SFTP publica sin sobrescribir mediante temporales privados y enlaces exclusivos cuando el servidor los admite; sin soporte de enlace remoto, una subida interrumpida puede dejar un destino parcial. Las descargas locales usan temporal y publicación exclusiva. FTP comprueba previamente la ausencia del destino, pero el protocolo no garantiza exclusión frente a otros clientes y una interrupción puede dejar un archivo remoto parcial que debe revisarse. FTP Windows CE conserva transferencias individuales; los árboles no están soportados. SFTP usa bloques de 64 KiB y páginas de 200 entradas; los listados Windows CE se acotan a 8 MiB.
 - El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. En la edición local no guarda cuando el backend no ofrece etag; el guardado remoto SSH/SFTP utiliza la comprobación de contenido descrita arriba. El resaltado se procesa en segundo plano y está acotado al primer MiB y 65.536 segmentos de estilo; el resto sigue siendo editable como texto. Es resaltado sintáctico, sin análisis semántico ni servidor de lenguaje.
-- Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; la compatibilidad con listados Windows CE utiliza curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.
+- Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; las subidas FTP y la compatibilidad con Windows CE utilizan curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.
 - Cerrar una terminal envía SIGHUP al grupo del proceso PTY y destruye el terminal; procesos deliberadamente desacoplados no quedan bajo supervisión de la app.
 - El binario compilado en una distribución reciente no garantiza compatibilidad con glibc más antigua. Construir en la base más antigua soportada antes de distribuir.
 

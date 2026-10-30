@@ -47,6 +47,29 @@ Se conservan propietario/grupo/permisos POSIX, no se garantizan ACL ni atributos
 extendidos. Los borradores recuperados requieren vinculación explícita al mismo
 destino y comparación de la huella original antes de habilitar Guardar.
 
+Las hojas de terminal incluyen `view` opcional (zoom acotado y foco), compatible
+con capturas antiguas. Se conserva también en los marcadores desconectados; al
+abrirlos se aplica el zoom al VTE creado. Solo el panel de la pestaña seleccionada
+recibe foco durante la recuperación. Cada chat guarda un desplazamiento relativo
+opcional, aplicado tras su asignación gráfica; un chat oculto mantiene el valor
+pendiente. El seguimiento del final se suspende cuando el usuario lee hacia arriba.
+
+Los documentos incorporan una referencia de vista opcional (cursor y ancla en
+caracteres, desplazamientos relativos), aplicada por el tracker tras cargar el
+texto. El explorador principal, las pestañas de archivos y los paneles SSH tienen
+vistas opcionales con ocultos, nombre seleccionado y desplazamientos relativos.
+La enumeración local pendiente se encadena sin perder el destino solicitado;
+las restauraciones nuevas invalidan callbacks gráficos anteriores. Las vistas
+ocultas conservan sus valores pendientes y reutilizar un editor no reemplaza su
+vista actual. Seleccionar no activa archivos ni provoca paginación adicional.
+
+El esquema de espacios incluye pestañas `FileBrowser` (perfil, protocolo y
+carpeta remota) y `Desktop` (perfil y protocolo). Son pestañas completas y se
+restauran como referencias desconectadas. La apertura explícita comprueba de
+nuevo el tipo de perfil y reemplaza la pestaña en la misma posición; los visores
+RDP/VNC muestran sus credenciales antes de conectar. No se guardan conexiones,
+contraseñas, frames ni decisiones de confianza de certificados.
+
 Los espacios conservan referencias de documento por UUID y origen, con los
 borradores en el almacén privado de recuperación. Antes de guardar se conservan
 las ediciones pendientes; un fallo evita sustituir el espacio anterior. Se abren
@@ -61,8 +84,23 @@ y del borrador. La restauración crea vistas sin cliente ni credenciales y reuti
 las identidades vivas; comprueba la capacidad antes de tocar la estructura.
 Codex publica la identidad nativa al crear o reanudar una conversación. La acción
 explícita de reanudación usa esa referencia y bloquea el envío hasta recibir
-`Resumed`; la copia local permanece si el proveedor falla. API/ACP no reanudan
-contexto en esta entrega. No se serializan concesiones ni peticiones de aprobación.
+`Resumed`; la copia local permanece si el proveedor falla. `chat_state` añade
+contexto API de turnos completados y referencias ACP ligadas al destino del perfil.
+Las API se rehidratan en memoria; ACP difiere `session/new` y negocia `loadSession`
+o `sessionCapabilities.resume` antes de cargar. Durante la carga rechaza solicitudes
+y omite la reproducción que ya representa la copia local. El envío espera `Continued`.
+No se serializan concesiones ni peticiones de aprobación.
+
+`chat_history` conserva un registro incremental JSONL por identidad de chat. Un
+actor con cola acotada serializa lotes en un worker; un bloqueo global comprueba
+la cuota antes de publicar y sincronizar. Cada mensaje tiene UUID propio y los
+fragmentos/reemplazos mantienen el texto completo, separado de la vista acotada.
+Los índices visuales son de página y no cargan todo el archivo en memoria. El
+borrado publica una marca que impide nuevas escrituras sobre la identidad retirada.
+`chat_history_ui` consulta páginas de 25 mensajes y exporta a un archivo local nuevo;
+la captura completa se puede excluir y no sustituye a la copia de recuperación.
+Las capturas de espacios/sesión drenan las escrituras de historial antes de guardar
+su referencia, y el cierre de un chat drena su cola antes de retirar el registrador.
 
 La recuperación automática reutiliza el esquema de espacios en un almacén
 separado, `workspaces/sessions/<UUID>.json`. `session_recovery` administra copias
@@ -98,3 +136,69 @@ Las pruebas se reparten entre pruebas Rust, `tests/`, ejemplos de diagnóstico y
 scripts gráficos de `lab/`. Los resultados fechados y sus limitaciones están en
 [VALIDACION.md](../VALIDACION.md); las conexiones reales de IA tienen su
 [propio registro](../PRUEBAS_CONEXION_IA.md).
+
+## Cola de transferencias y navegación de chats
+
+`transfer_queue.rs` mantiene el diario privado por identidad de destino, bloqueo
+entre procesos, revisión y estados de operación. `transfer_queue_ui.rs` comparte
+el controlador entre paneles del mismo destino y guarda antes de enviar al
+transporte. `transfer.rs` planifica árboles y publica archivos SFTP; FTP reutiliza
+GVfs para navegación y curl con credenciales por stdin para subidas. Ningún
+estado recuperado ejecuta una transferencia automáticamente.
+
+`codex_chat.rs` alterna recientes/conversación mediante GtkStack, conservando el
+editor fuera de ambas páginas. `ai_panel.rs` sustituye la instancia de conversación
+dentro de la misma página del Notebook; su identidad y archivo cambian juntos.
+`chat_history.rs` conserva copias de continuación privadas filtradas por agent_id,
+con cuota compartida con JSONL, escritura atómica y orden de captura para rechazar
+escrituras tardías. El borrado invalida tanto el JSONL como la copia de recientes.
+
+## Resolución de versiones del editor
+
+`editor_compare.rs` mantiene la revisión modal Base/Local/Original y el resultado
+manual. Verifica el original antes de adoptar la base; aplicar modifica solamente
+el editor y fuerza la conservación del borrador. `text_diff.rs` calcula diferencias
+por líneas fuera de GTK, con prefijo/sufijo común, líneas internadas y LCS acotado
+a dos millones de celdas; por encima muestra regiones completas sin truncar texto.
+
+`RemoteDocument` conserva texto, huella y metadatos de la versión base. La lectura
+estable y la aceptación comparan tamaño, mtime, tipo, UID/GID y permisos; atime no
+se toma como conflicto porque leer el archivo puede actualizarlo. La vista de un
+borrador recuperado con un original cambiado no autoriza guardar hasta revisar.
+El registro privado `Draft` añade `base_text` opcional (8 MiB por base y 8 MiB por
+borrador), validado contra la huella SSH. Los registros anteriores siguen siendo
+legibles. La base avanza tras guardar o aceptar una revisión, sin reproducir
+operaciones ni utilizar otro destino. No existe bloqueo SFTP entre comprobación
+y rename y no se promete conservación de ACL/xattrs no expuestos por el cliente.
+
+## Ejecución supervisada
+
+`execution.rs` controla procesos `/bin/sh` con pipes independientes y grupo propio;
+SSH reutiliza un `SshConnection` capturado al aprobar y un canal multiplexado sin
+alternativa de autenticación. El timeout abarca la preparación SSH y el proceso.
+Se drenan stdout/stderr con captura total de 4 MiB; el cancelador es atómico y la
+terminación local señala el grupo antes de reaprovechar/recolectar el PID. Los
+resultados remotos inciertos usan `Unknown` y retorno ausente. Un semáforo limita
+la aplicación a cuatro trabajos; los snapshots de vista se acotan por flujo.
+
+`execution_history.rs` prepara un registro durable antes de lanzar, reserva el
+peor tamaño JSON, aplica cuota privada de 1 GiB/1000 archivos, bloquea entre
+escritores y publica por temporal/fsync/rename. Las reservas activas evitan borrar
+registros en curso. Los temporales no publicados cuentan sin eliminar su contenido.
+Se conserva cada segundo como máximo una escritura en curso, y al terminar se
+espera la escritura final. Una captura `Preparing/Running` sin propietario activo
+se lee como resultado desconocido, sin iniciar procesos.
+
+`supervised_ui.rs` gestiona formulario, revisión, resultados, historial y exportación.
+No pausa el guardado automático de espacios durante toda una ejecución. El cierre
+normal confirma cancelar, espera y protege resultados no guardados. La memoria de
+cada ventana conserva como máximo ocho trabajos y no retira datos pendientes de
+conservación sin confirmación. Las lecturas de historial se serializan por ventana
+con selección más reciente y descarte de respuestas obsoletas.
+
+El broker existente anuncia `supervised_targets`/`supervised_execute`; el handler
+requiere destino y carpeta explícitos y aprobación nueva. Valida que la solicitud
+siga viva antes de lanzar y cancela si se cierra la respuesta pendiente. El retorno
+MCP contiene colas acotadas, indicadores de truncamiento e identidad de ejecución;
+la captura completa disponible queda en el registro/exportación, no se reinyecta
+como entrada ni se utiliza para repetir acciones.

@@ -6,6 +6,176 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Ejecución supervisada — 30 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con
+  Rust 1.93.1. `cargo test --quiet`: 112 pruebas aprobadas y cinco ignoradas de
+  entorno; `cargo test --quiet --no-default-features --lib`: 62 aprobadas.
+- Lógica de ejecución: directorio explícito, Unicode, stdout/stderr separados,
+  código de salida, cancelación del grupo local, timeout, límite conjunto de
+  4 MiB y drenaje de salida adicional. Sin estado de terminación confirmado,
+  el resultado es desconocido; no se inventa un código de salida.
+- Historial: permisos 0700/0600, escrituras atómicas, exportación binaria exacta
+  sin sobrescritura, captura máxima de 4 MiB, 100 registros desde cuatro hilos,
+  cuota, archivos corruptos y enlaces simbólicos. La falta de espacio reservado
+  impide iniciar el comando. Las capturas periódicas solo se escriben si cambia
+  la salida; la evidencia final se espera antes de considerar terminado el trabajo.
+- `python3 lab/check_supervised.py`: GTK en oscuro y claro; rechazar no ejecuta,
+  aprobar ejecuta una vez, directorio con comillas, salida y retorno reales,
+  timeout, cancelación, exclusión del historial y fallo de reserva. Incluye una
+  petición MCP por el socket real, caducidad antes de aprobar y desconexión del
+  solicitante. Los resultados cuya persistencia falla requieren retirada explícita
+  de memoria; el historial conservado no se elimina por esa retirada.
+- El mismo laboratorio mata realmente la aplicación con SIGKILL después de una
+  captura periódica: al reiniciar conserva la salida parcial, marca el resultado
+  desconocido y no repite el comando. El cierre normal con una ejecución activa
+  pide confirmación, cancela el grupo y espera el registro final antes de salir.
+- `python3 lab/check_remote_editor.py`: integración con sshd aislado aprobada,
+  incluidos comandos supervisados sobre el ControlMaster autenticado, directorio
+  con comillas, ambos flujos, retorno 13 y resultado desconocido ante timeout,
+  cancelación o retorno SSH 255. La conexión compartida permanece utilizable.
+  También pasan las regresiones gráficas de edición y recuperación remota.
+- `python3 lab/check_recovery.py`: ocho casos aprobados, incluidos SIGKILL,
+  conflicto, original ausente, recuperación remota sin conexión y cierre bloqueado
+  si falla el autoguardado.
+- Se ajustaron los fixtures ACP y Responses al mensaje de sistema que precede al
+  primer mensaje del usuario, conservando las comprobaciones de autorización.
+
+Límites: pruebas locales y SSH de laboratorio; no acreditan todos los servidores
+ni una sesión gráfica Wayland. Cancelar el cliente SSH no demuestra que el proceso
+remoto haya terminado: se muestra resultado desconocido y se exige comprobarlo
+antes de repetir. La ejecución no es un sandbox y no se reanuda automáticamente.
+
+## Resolución de versiones del editor remoto — 30 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas.
+  `cargo test`: 100 pruebas aprobadas y cinco de entorno ignoradas en la suite
+  predeterminada. `cargo test --no-default-features --lib`: 53 aprobadas.
+- `lab/check_remote_editor.py`: servidor sshd desechable en loopback, claves y
+  known_hosts privados, sin modificar configuración global ni usar producción.
+  Prueba Rust de integración aprobada: lectura, guardados repetidos y sustitución
+  de inodo, conservación de permisos 0640 y bit especial 2640, rechazo de enlaces,
+  binarios y exceso de tamaño, destino incorrecto y eliminación de temporales.
+- Ampliada esa prueba con revisión Base/Local/Original: una comparación obsoleta
+  no se acepta; aceptar no escribe; los cambios posteriores de permisos también
+  producen conflicto; la base avanza tras guardar. La recuperación para revisión
+  conserva el guardado bloqueado hasta aceptar explícitamente el original.
+- GTK/Xvfb en claro y oscuro: tres versiones exactas y diferencias resaltadas,
+  resultado editable, confirmación obligatoria, cancelación sin perder el borrador,
+  rechazo del original que cambió después de comparar y del resultado editado
+  durante la comprobación. Aplicar conserva el original intacto y persiste texto y
+  base; Guardar publica después y mantiene los permisos. Capturas revisadas:
+  `artifacts/editor-compare-dark.png` y `editor-compare-light.png`.
+- Recuperación SSH desde un JSON anterior sin `base_text`: se indica base ausente,
+  se conserva el texto, se revisa y aplica expresamente sin escribir el remoto.
+  Regresión de apertura SSH desde espacios de trabajo aprobada sin duplicación.
+- `lab/check_recovery.py`: ocho escenarios aprobados, incluyendo SIGKILL real,
+  restauración/guardado con etag, conflicto, original ausente, perfil remoto
+  eliminado, descarte confirmado, cierre normal y fallo de captura que impide
+  cerrar y conserva el editor modificado.
+- Pruebas unitarias nuevas: reconstrucción exacta de 81 parejas de texto con
+  Unicode, CRLF, inserciones, borrados y ausencia de salto final; contraste grande
+  acotado y optimización de prefijo común; compatibilidad de borradores anteriores,
+  persistencia de la base y rechazo de una base que no coincide con la huella SSH.
+
+Límites: la resolución es manual y no afirma fusionar automáticamente los cambios.
+El detalle se acota a dos millones de celdas y 200.000 líneas por versión; por
+encima se muestran regiones completas con aviso, sin truncar los textos. La base
+privada requiere hasta 8 MiB adicionales por borrador. SFTP no ofrece aquí ACL ni
+xattrs y la comprobación antes de rename no bloquea a otros clientes.
+No se han hecho commits ni push.
+
+## Recientes por agente y cola persistente — 30 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas.
+- `cargo test`: 96 pruebas aprobadas; cinco pruebas de entorno permanecen
+  ignoradas en la suite predeterminada. `cargo test --no-default-features --lib`:
+  49 pruebas aprobadas. `git diff --check`: sin incidencias.
+- `python3 lab/check_chat_recents.py`: GTK/Xvfb, dos perfiles API de prueba y un
+  fixture nativo Codex, sin cuentas reales. Verifica vista inicial completa,
+  editor visible, respuesta en curso que termina sin cancelarse al abrir recientes,
+  escritura que abre una conversación sin contexto anterior,
+  sustitución dentro de la misma pestaña, selección y continuación, listas por
+  agente, reinicio del proceso y paginación nativa. El protocolo confirma una
+  creación nativa y dos reanudaciones; seleccionar no reenvía turnos anteriores.
+  Comprueba también permisos privados y captura de los mensajes nativos cargados.
+  Capturas: `artifacts/chat-recents-initial.png` y `chat-recents-reload.png`.
+- `python3 lab/check_chat_state.py`: aprobados los seis escenarios de recuperación
+  API, ACP, fallos/reintento/desconexión ACP, estado Codex y 75 turnos con archivo
+  completo. Las copias de espacios continúan desconectadas hasta reanudación.
+- `lab/check_workspace_views.py`, `lab/check_workspace_visuals.py` y
+  `lab/check_workspace_transfers.py`: aprobados cursor/selección/desplazamiento,
+  estado del explorador, foco/zoom de terminal, lectura del chat sin salto forzado
+  y restauración FTP/SFTP desconectada. La prueba de lectura espera la posición
+  real asignada por GTK; no toma la posición pendiente del snapshot como prueba
+  de que la vista ya esté lista. Una ejecución concurrente bajo compilación
+  también agotó el tiempo fijo de la prueba del editor; su repetición aislada
+  pasó sin cambiar el código del editor.
+- `lab/check_file_browser.py ftp --queue --colon-user` y la variante
+  SFTP `--queue`: aprobados selección múltiple, portapapeles y arrastre en ambos
+  sentidos, carpetas anidadas/vacías, nombres Unicode y porcentaje literal,
+  rechazo de sobrescritura, reintento manual, pausa, diario privado y recuperación
+  tras SIGKILL con inicio explícito. FTP probado con usuario que contiene dos
+  puntos. Se aprobó también la regresión FTP Windows CE.
+- `tests/shared_sftp.rs`: dos pruebas reales de laboratorio aprobadas (SSH
+  compartido y SFTP independiente), incluyendo cancelación después de transferir
+  bytes, ausencia de publicación parcial y reintento. El contenedor propio quedó
+  detenido después de las comprobaciones.
+
+Límites: no acredita cuentas reales de GitHub/Codex ni servidores FTP de producción.
+Las subidas FTP no garantizan exclusión frente a otro cliente y pueden dejar un
+archivo parcial tras interrupción. Los JSONL antiguos sin identidad de agente y
+contexto de continuación siguen consultables en Historial local completo; no se
+atribuyen automáticamente a un perfil por su nombre visible.
+
+## Historial completo y continuidad de chats; script de compilación — 28 de octubre de 2026
+
+- Historial incremental privado JSONL, separado de las 128 tarjetas de pantalla.
+  Consulta de conversaciones cerradas por páginas de 25 mensajes y exportación
+  completa a archivo nuevo. Captura por defecto, exclusión explícita y borrado
+  confirmado sin resurrección. Límite global de 1 GiB/1000 conversaciones, entrada
+  de 2 MiB y cola de 64 elementos/4 MiB por chat; la importación inicial está
+  acotada a 16 MiB. La lectura del agente se pausa ante disco lento y la captura
+  se detiene con aviso ante errores/cuota, conservando los registros existentes.
+- Contexto API de intercambios completados ligado al destino del perfil. Se
+  rehidrata en memoria, sin peticiones HTTP ni repetición de herramientas; el
+  siguiente mensaje explícito conserva el contexto. ACP negocia `loadSession`
+  o `sessionCapabilities.resume`, no crea otra sesión y rechaza permisos durante
+  la reproducción. El envío espera confirmación. Los fallos de carga y pérdida
+  del proceso permiten reintentar conservando mensajes, borrador y adjuntos.
+- Los espacios y copias automáticas conservan adjuntos pendientes y el nivel de
+  razonamiento anunciado por el modelo. Las rutas ausentes no se leen ni recrean.
+  Los formatos anteriores siguen siendo consultables: no se inventan referencias
+  ni mensajes que no guardaron.
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones reales correctas,
+  también al invocar el script desde otro directorio. Opciones excluyentes,
+  `Cargo.lock` respetado, dos trabajos por defecto, reutilización del toolchain
+  instalado y errores propagados. `bash -n`, ayuda y casos de argumentos inválidos,
+  Cargo inexistente y fallo de Cargo comprobados con sus códigos de salida.
+- Se encontró un fallo de renombrado de metadatos de Rust en el directorio de
+  artefactos release anterior. Una salida limpia en el mismo volumen funcionó;
+  se conservó el directorio antiguo como respaldo y se regeneró `target/release`.
+  No se modificó la configuración global ni se cerró la instancia gráfica con
+  trabajo abierto. La prueba GTK usa los hooks de debug; el ejecutable release
+  se acredita por compilación, no por marcadores que solo existen en debug.
+- `cargo test --locked --jobs 2`: **80 pruebas aprobadas**, cinco omitidas por
+  defecto (cuatro de laboratorio y una que requiere una pantalla). Incluye
+  límites y corrupción de historial, exportación sin sobrescritura, exclusión y
+  borrado, contrapresión ante disco bloqueado, contexto API y soporte/carga ACP.
+  El protocolo API de ambos formatos conserva un turno entre clientes nuevos y
+  no realiza HTTP al restaurar. ACP cubre carga, reanudación sin replay, rechazo
+  por falta de soporte y errores, sin nueva sesión ni permisos aceptados.
+- `python3 lab/check_chat_state.py`: seis casos GTK con proveedores sintéticos:
+  API, ACP, fallo y reintento, desconexión y reintento, razonamiento/adjuntos y
+  75 turnos. Se verifican 128 tarjetas visibles y 153 mensajes archivados, consulta
+  y paginación del historial local, y ausencia de lecturas/recreación de adjuntos.
+- Límites: las API mantienen 256 KiB/128 entradas por solicitud; se conserva hasta
+  2 MiB/129 entradas del último contexto completado para no perder su respuesta.
+  No es contexto ilimitado. El cliente nativo conserva el límite de 128 elementos
+  por turno con interrupción y aviso. Agentes ACP sin capacidad de carga y copias
+  antiguas sin referencia no pueden reanudarse. Sin proveedores reales, servicios
+  de producción, commits ni push de esta entrega.
+
 ## Pie de chat compacto — 27 de octubre de 2026
 
 - Dos filas como máximo: cuenta, cuota y acceso; contexto, tokens y avisos.
@@ -781,3 +951,117 @@ pendiente; la app usa GIO directamente y la prueba de arranque no verifica su mo
 Los artefactos de compilación quedan en `target/`, excluido por `.gitignore`.
 El estado de Git y los resultados de apartados posteriores deben consultarse por
 separado; esta sección describe únicamente la validación inicial.
+
+## Restauración de pestañas FTP/SFTP — 29 de octubre de 2026
+
+- Referencias a perfil y protocolo, carpeta remota absoluta conocida, orden y
+  selección; recuperación desconectada sin consultar credenciales ni iniciar SFTP.
+- Conexión explícita con los mecanismos existentes; reemplazo de la pestaña en su
+  posición tras preparar el cliente. Un fallo al buscar credenciales conserva la
+  pestaña para reintentar; cerrarla durante esa búsqueda cancela la apertura.
+- Prueba GTK aislada `python3 lab/check_workspace_transfers.py`: FTP/SFTP,
+  conservación de referencias, ausencia de nuevos clientes/master SFTP y rechazo
+  de perfiles eliminados o cambiados de protocolo. No contacta servidores reales.
+- Prueba unitaria de serialización y rechazo de rutas relativas, caracteres de
+  control, protocolos incompatibles y exploradores dentro de divisiones.
+- Resultado: compilaciones debug y release correctas; 60 pruebas de biblioteca aprobadas;
+  `check_workspace_transfers.py` aprobado, incluido reemplazo de la pestaña con
+  canales de transferencia en memoria y conservación de un único explorador
+  local; los cuatro escenarios de `check_workspaces.py` también aprobados.
+- La autenticación y navegación reales tras recuperar la pestaña requieren aún
+  validación con servidores de laboratorio. RDP/VNC y foco/desplazamiento quedan
+  fuera de esta entrega. No se han hecho commits ni push.
+
+## Restauración de escritorios RDP/VNC — 29 de octubre de 2026
+
+- Las pestañas de escritorio conservan perfil y protocolo, orden y selección en
+  espacios y capturas automáticas. La recuperación no inicia clientes: primero
+  se pulsa **Abrir escritorio**, después se introducen credenciales y se pulsa
+  **Conectar**. No se serializan contraseñas, frames, eventos de entrada ni
+  excepciones de confianza de certificados.
+- Un perfil eliminado o cambiado de protocolo permanece como aviso. La apertura
+  vuelve a comprobar el perfil actual; conserva la posición de la pestaña y usa
+  el visor y sus mecanismos existentes de desconexión y validación TLS.
+- `python3 lab/check_workspace_desktops.py`: aprobado el recorrido GTK para ambos
+  protocolos, ausencia de conexiones al restaurar/abrir credenciales, orden,
+  selección, rechazo de perfiles incompatibles, exclusión de contraseña y cierre.
+- `python3 lab/check_vnc.py --workspace --password`: aprobado contra un servidor
+  RFB desechable en loopback. Incluye guardar/cargar el espacio, restauración,
+  autenticación, framebuffer, teclado, ratón, rueda y cierre real de conexión.
+- `cargo test --locked --lib --jobs 2`: 61 aprobadas. Compilaciones debug y release correctas;
+  `py_compile` de los dos scripts y `git diff --check` correctos. Regresión de
+  espacios y restauración FTP/SFTP comprobada con sus scripts existentes.
+- No se ha probado una conexión RDP real restaurada. Foco de paneles y estados
+  visuales restantes siguen pendientes. No se han hecho commits ni push.
+
+## Foco, zoom y posición de lectura — 29 de octubre de 2026
+
+- Las hojas de terminal guardan `view` opcional con zoom entre 0,5 y 3 y panel
+  activo. Los marcadores desconectados conservan esos valores al volver a guardar;
+  el foco se aplica al botón del panel de la pestaña seleccionada y el zoom al
+  VTE creado únicamente cuando se solicita abrir la terminal.
+- Los chats guardan una posición relativa de lectura opcional. La restauración
+  espera la asignación gráfica; si la pestaña está oculta conserva el valor
+  pendiente. Las respuestas nuevas no desplazan al lector que está hacia arriba;
+  si está al final, mantiene el seguimiento de nuevas respuestas.
+- Las capturas antiguas usan zoom 1 y posición final del chat. Se rechazan zoom y
+  posiciones fuera de rango. No se guarda scrollback ni desplazamiento de terminal.
+- `cargo test --locked --jobs 2`: 87 aprobadas y 5 omitidas (pruebas que requieren
+  display o laboratorios externos). Incluye compatibilidad y límites de los nuevos
+  campos. Compilaciones debug y release, `py_compile` del script y
+  `git diff --check` correctos.
+- `python3 lab/check_workspace_visuals.py`: aprobado en GTK/Xvfb; restauración sin
+  procesos nuevos, foco de la división seleccionada, zoom aplicado al abrir,
+  posición de chat pendiente/visible, lectura estable al añadir contenido y
+  seguimiento de respuestas al volver al final.
+- `check_workspaces.py` y `check_workspace_chats.py`: aprobados sus cuatro modos
+  respectivos, incluida reanudación explícita y fallo recuperable del proveedor.
+- No se han hecho commits ni push. Siguen pendientes otros estados visuales de
+  editores/exploradores y la validación real SSH/RDP ya documentada.
+- `python3 lab/check_chat_state.py`: sus seis escenarios también aprobados
+  (API, ACP, reintentos, desconexión, adjuntos/razonamiento y archivo largo), sin
+  ejecutar proveedores reales.
+
+## Vistas de editor/exploradores y validación remota — 29 de octubre de 2026
+
+- Campos opcionales y compatibles con capturas anteriores: cursor/ancla en
+  caracteres y desplazamiento relativo por editor; ocultos, nombre seleccionado
+  y desplazamiento por explorador local, SSH y FTP/SFTP. Se validan posiciones,
+  límites y nombres simples. No se activan archivos ni se pagina automáticamente.
+- Aplicación tras carga asíncrona del texto/listado. Una carpeta solicitada durante
+  la enumeración inicial se conserva y se encadena; callbacks de restauraciones
+  anteriores se invalidan. Las vistas ocultas conservan valores pendientes.
+  Reutilizar un editor mantiene su vista actual; una selección ausente queda vacía.
+- Cada división SSH recuperada conserva la carpeta/vista de su propio panel incluso
+  si comparte transporte con otra división. El explorador lateral sigue el foco
+  del terminal; no se toma siempre el primer panel del perfil.
+- `cargo test --locked --jobs 2`: 88 aprobadas y 5 omitidas por sus requisitos de
+  display/laboratorio. Nuevas pruebas de compatibilidad, límites y persistencia.
+- `python3 lab/check_workspace_views.py`: aprobado con cursor/selección Unicode,
+  lectura tras cargar, restauración durante enumeración, ocultos, selección
+  desaparecida, reutilización del editor y listado remoto sintético. Se comprueba
+  la posición real del viewport, además del valor pendiente de vistas ocultas.
+- `check_workspace_documents.py`: aprobados sus siete escenarios de recuperación,
+  guardado, borradores ausentes/dañados y preservación del espacio anterior.
+  `check_workspace_transfers.py` y `check_workspace_visuals.py` también aprobados.
+- `python3 lab/check_ui.py ssh --workspace`: aprobado contra el laboratorio en
+  loopback; guardar/cargar el espacio, restauración sin conexión, conexión explícita,
+  dos divisiones con transporte compartido y carpetas distintas, listados reales,
+  selección remota, cambio del explorador con el foco y cierre de la conexión.
+- `python3 lab/check_ui.py rdp --workspace`: aprobado contra xrdp del laboratorio,
+  con framebuffer real, teclado/ratón y cierre. `rdp-certificate --workspace`
+  también aprobado: diálogo visible y rechazo del certificado no confiable.
+  Al arrancar, el laboratorio regeneró su certificado; se actualizó la CA local
+  directamente desde el contenedor con `lab/lab.py trust`, manteniendo validación
+  TLS y de nombre. No se modificó la confianza global del sistema.
+- `python3 lab/check_file_browser.py sftp`: aprobado con un único explorador local,
+  navegación, transferencias, portapapeles y arrastre en ambos sentidos, protección
+  contra sobrescritura y cierre. Las dos pruebas explícitas de `shared_sftp` también
+  aprobadas (transporte compartido e independiente).
+- Compilaciones debug y release correctas, `py_compile` de los scripts modificados
+  y `git diff --check` correctos.
+- El contenedor propio, inicialmente detenido, se inició para las pruebas y quedó
+  detenido de nuevo. No se usaron equipos de producción ni se hicieron commits/push.
+- Límite: la selección se aplica al listado cargado; no se reconstruye una página
+  posterior automáticamente. Siguen pendientes las fases de transferencias por
+  lotes/colas, diff remoto, ejecución supervisada, recetas, túneles e intervenciones.

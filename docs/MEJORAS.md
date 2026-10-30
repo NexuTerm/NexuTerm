@@ -19,13 +19,19 @@ restaurar, iniciar expresamente y tratar carpetas ausentes o perfiles eliminados
 
 Pendiente para cerrar la fase de espacios:
 
-- Historial completo local de chats y resultados supervisados; reanudación API/ACP,
-  adjuntos pendientes y estado visual del chat. La copia visible y la
-  referencia nativa de Codex ya se integran en los espacios.
-- Integración de pestañas FTP/SFTP y escritorios remotos, panel enfocado,
-  estado visual restante. La estructura compatible ya se conserva automáticamente.
-- Verificación específica de reconexión SSH restaurada contra el laboratorio;
-  la prueba gráfica inicial de espacios utiliza terminales locales.
+- Registro separado de resultados supervisados. La posición de lectura del chat
+  ya se conserva y la llegada de respuestas respeta la lectura anterior.
+  El historial local, las referencias reanudables y los adjuntos/razonamiento
+  pendientes ya están integrados.
+La recuperación de vistas básicas ya conserva cursor, selección y desplazamiento
+por editor; ocultos, selección y desplazamiento por explorador; panel de terminal
+activo y zoom; posición de lectura del chat. FTP/SFTP y RDP/VNC se recuperan
+sin conexión. Las selecciones de explorador solo se aplican al listado cargado,
+sin paginación adicional automática.
+
+La reconexión SSH restaurada se ha validado contra el laboratorio propio con dos
+divisiones y una conexión compartida. RDP restaurado se ha validado con imagen,
+entrada, cierre y rechazo explícito de certificados no confiables.
 
 ## Recuperación automática de sesión
 
@@ -43,8 +49,7 @@ pestañas ya restauradas. El descarte es explícito y no borra originales ni
 borradores. Se conservan los registros dañados y los espacios con nombre siguen
 siendo independientes. Límite inicial: 32 copias de 16 MiB, sin expulsión automática.
 
-Pendiente: los tipos de pestaña y estados visuales aún no compatibles, historial
-completo de chats y reanudación API/ACP. Una caída puede perder los cambios desde
+Pendiente: los tipos de pestaña y estados visuales aún no compatibles. Una caída puede perder los cambios desde
 la última captura completada; las escrituras o transferencias en curso posponen
 la siguiente captura. No se vuelven a ejecutar operaciones al recuperar.
 
@@ -62,18 +67,29 @@ conectar agentes ni transmitir contenido y se reutilizan los chats vivos sin
 sustituir sus cambios. Un perfil eliminado conserva su copia consultable. Si se
 supera el límite de ocho chats, se rechaza la apertura sin restauración parcial.
 
-Codex conserva su referencia nativa y ofrece reanudación explícita en solo lectura;
-no se permite enviar hasta confirmarla. Los fallos conservan la copia y el borrador.
-API/ACP quedan como copias consultables, sin simular la continuidad del contexto.
-Se mantiene la compatibilidad con espacios anteriores que no incluyen chats.
+Codex conserva su referencia nativa. API recupera el contexto del último turno
+completado sin peticiones al proveedor ni repetición de herramientas. ACP carga o
+reanuda por referencia solo si el agente anuncia soporte, sin crear otra sesión ni
+aceptar operaciones durante la reproducción. Se preservan las rutas de adjuntos
+pendientes y el razonamiento anunciado por el modelo; los fallos permiten reintentar.
 
-No incluye historial ilimitado (se conservan hasta los 128 mensajes visibles),
-reanudación API/ACP, adjuntos pendientes, razonamiento, desplazamiento,
-ni registro separado de resultados supervisados. El autoguardado de la copia
-visible se describe en la entrega de recuperación automática.
-`lab/check_workspace_chats.py` prueba persistencia y reapertura entre procesos,
-reutilización, perfiles eliminados, capacidad, cierre y reanudación simulada de
-Codex, incluidos errores, sin modelos ni servicios externos.
+Implementado también: historial local separado de las 128 tarjetas visibles,
+archivo incremental privado, consulta de conversaciones cerradas por páginas y
+exportación JSONL completa. Límite global inicial de 1 GiB/1000 conversaciones,
+cola acotada y aviso al detener la captura. Permite excluir el archivo completo
+del chat y borrarlo expresamente, sin modificar las copias de recuperación ni
+resucitar registros borrados. No contiene credenciales gestionadas ni aprobaciones.
+
+Pendiente: otros estados visuales, registro separado de resultados
+supervisados y validación contra proveedores reales. Las copias anteriores no
+pueden reconstruir referencias o mensajes que nunca guardaron; los agentes ACP
+sin capacidad de carga se mantienen consultables. Historial completo no significa
+contexto ilimitado enviado al modelo ni almacenamiento sin límite.
+
+Pruebas: `lab/check_workspace_chats.py` y `lab/check_chat_state.py`, con reanudación
+API, carga ACP, fallo y reintento, adjuntos ausentes, razonamiento y 75 turnos que
+mantienen 128 tarjetas visibles y 153 mensajes archivados. Se usan proveedores
+sintéticos, sin servicios reales.
 
 ## Documentos asociados al espacio
 
@@ -121,26 +137,60 @@ verificación y reemplazo atómico con preservación de propietario/grupo/permis
 POSIX. No hay alternativa de escritura directa. El reemplazo cambia el inodo y
 no garantiza ACL ni atributos extendidos; la interfaz y el README lo indican.
 
+## Transferencias y recientes por agente — 30 de octubre de 2026
+
+Implementada la selección múltiple y los árboles FTP/SFTP desde el explorador
+local principal, mediante portapapeles y arrastre en ambos sentidos. La cola por
+destino conserva estados, intentos y errores, permite pausa/cancelación y reintento
+manual desde el inicio del archivo. Recuperar no conecta ni ejecuta pendientes.
+Las carpetas se planifican antes de escribir y cada operación terminada se guarda.
+Los límites y las diferencias de publicación FTP/SFTP figuran en el README.
+
+Chats recientes pasa a ser una vista completa alternativa a la conversación,
+con editor visible y listado por perfil de agente. Elegir un chat o empezar a
+escribir sustituye esa vista en la misma pestaña. El retorno guarda la conversación
+anterior; los recientes y los JSONL comparten cuota y borrado sin resurrección.
+
+## Editor remoto: comparación y resolución — 30 de octubre de 2026
+
+Implementada la revisión Base/Local/Original actual, diferencias por líneas y
+resultado editable con confirmación explícita. Aplicar conserva el resultado como
+borrador y verifica de nuevo el original; no publica cambios. Guardar mantiene la
+verificación independiente y el reemplazo atómico SFTP. Un cambio de contenido,
+permisos, propietario/grupo o mtime invalida la versión que se revisó.
+
+Se conserva la base en los borradores nuevos mediante un campo opcional compatible
+con los anteriores. Un borrador SSH cuyo original cambió puede vincularse para
+revisión, con guardado bloqueado hasta confirmar la resolución. Los antiguos sin
+base se muestran como tales. Los metadatos disponibles se presentan y se conservan
+los permisos POSIX, incluidos bits especiales; ACL/xattrs siguen fuera de las
+capacidades del transporte actual. Se mantienen los límites de edición y se acota
+el coste del contraste, sin añadir dependencias ni hacer fusiones automáticas.
+
+## Ejecución supervisada — 30 de octubre de 2026
+
+Implementados procesos locales con grupo propio y canales SSH separados de la
+terminal interactiva, ligados a destino/carpeta/comando aprobados. Hay interfaz
+propia y herramientas MCP, aprobación nueva por ejecución, stdout/stderr, duración,
+retorno opcional, timeout inicial 60 s y captura total de 4 MiB con aviso de
+truncamiento. Se distingue resultado desconocido en SSH sin afirmar terminación
+remota cuando se cancela o pierde el canal.
+
+El historial privado conserva capturas periódicas/finales, permite exclusión,
+consulta, exportación y borrado confirmado, con cuota de 1 GiB/1000 archivos y
+reserva previa. Una captura recuperada es evidencia; no reanuda ni repite comandos.
+El cierre cancela y espera los activos, protege salidas sin historial confirmado
+y permite exportar o descartar expresamente. Se acotan concurrencia, memoria y
+lecturas de historial; no se añaden dependencias ni se altera la entrada del shell.
+
 ## Fases siguientes, en orden
 
-1. **Transferencias:** selección múltiple, árboles, cola persistente, progreso,
-   cancelación y reintento manual desde el inicio del archivo; temporales y
-   publicación segura donde el backend lo permita, sin seguir enlaces ni
-   sobrescribir por defecto.
-2. **Editor remoto:** completar el diff de base/local/remoto y ampliar el
-   tratamiento de metadatos donde el servidor lo permita. El temporal SFTP
-   verificado y reemplazo atómico ya están implementados; la comprobación de
-   conflictos no equivale a un bloqueo contra otros clientes.
-3. **Ejecución supervisada:** procesos locales y canales SSH separados del shell
-   interactivo; destino y directorio explícitos, aprobación, stdout/stderr,
-   estado, duración y retorno opcional. Timeout inicial 60 s, captura hasta 4 MiB
-   con indicación de truncamiento y resultado desconocido cuando corresponda.
-4. **Recetas:** espacio en disco, estado de servicio y registros systemd; parámetros
+1. **Recetas:** espacio en disco, estado de servicio y registros systemd; parámetros
    validados, comprobaciones finales y las mismas aprobaciones que la ejecución.
-5. **Importación y túneles:** previsualización de perfiles OpenSSH sin ejecutar
+2. **Importación y túneles:** previsualización de perfiles OpenSSH sin ejecutar
    directivas; túneles locales/remotos/SOCKS supervisados, loopback por defecto y
    activación explícita.
-6. **Intervenciones:** objetivo, destinos y cronología con evidencias; diagnóstico,
+3. **Intervenciones:** objetivo, destinos y cronología con evidencias; diagnóstico,
    propuesta, aprobación, cambio y verificación; recuperación sin repetir acciones
    y exportación revisable Markdown/JSON con exclusión de contenido sensible.
 
