@@ -49,7 +49,7 @@ pub(super) fn button(state: &Rc<State>, composer: &gtk::TextView) -> gtk::Button
         *active.borrow_mut() = Some((stop, task.abort_handle()));
         button.set_icon_name("media-playback-stop-symbolic");
         button.add_css_class("destructive-action");
-        button.set_tooltip_text(Some("Grabando · pulsa para terminar (máximo 60 segundos)"));
+        button.set_tooltip_text(Some("Grabando · termina tras una pausa o pulsa para terminar (máximo 60 segundos)"));
         let button = button.downgrade();
         let input = input.clone();
         let active = active.clone();
