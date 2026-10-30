@@ -961,4 +961,3 @@ mod recent_tests {
         assert!(!dir.path().join(format!("{}.jsonl", disabled.id)).exists());
     }
 }
-
