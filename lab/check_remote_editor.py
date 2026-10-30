@@ -56,6 +56,8 @@ def main():
                 print("PASS atomic SFTP: repeated save, inode replacement, metadata, recovery baseline, wrong destination, conflict and cleanup", flush=True)
                 gui(base, env, "dark")
                 gui(base, env, "light")
+                gui_compare(base, env, "dark")
+                gui_compare(base, env, "light")
                 gui_recovery(base, env, conflict=False)
                 gui_recovery(base, env, conflict=True)
                 gui_workspace_document(base, env)
@@ -84,6 +86,27 @@ def gui(base, env, theme):
     assert "NEXUTERM_SMOKE_SYNTAX_OK" in result.stderr, result.stderr
     assert remote.read_text() == "def value():\n    return 42  # editado desde NexuTerm\n"
     print(f"PASS GTK {theme}: remote file activation, private download, syntax colours, edit, Ctrl+S and atomic SFTP replacement")
+
+
+def gui_compare(base, env, theme):
+    remote = base / 'remote' / ('compare-' + theme + '.py')
+    remote.write_text('def value():\n    return 1\n')
+    remote.chmod(0o640)
+    config = base / ('compare-' + theme) / 'config/nexuterm'
+    config.mkdir(parents=True)
+    (config / 'sessions.json').write_text(json.dumps(dict(version=2, profiles=[], preferences=dict(theme=theme))))
+    env = {k: v for k, v in env.items() if not k.startswith('NEXUTERM_SMOKE')}
+    artifacts = ROOT / 'artifacts'
+    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(base / ('compare-' + theme) / 'data'), GSK_RENDERER='cairo', GDK_BACKEND='x11',
+               NEXUTERM_SMOKE_TEST='1', NEXUTERM_SMOKE_REMOTE_EDITOR=str(remote), NEXUTERM_SMOKE_EDITOR_COMPARE='1',
+               NEXUTERM_COMPARE_SCREENSHOT=str(artifacts / ('editor-compare-' + theme + '.png')))
+    result = subprocess.run(['xvfb-run', '-a', 'dbus-run-session', '--', str(ROOT / 'target/debug/nexuterm')], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+    (artifacts / ('editor-compare-' + theme + '.log')).write_text(result.stdout + result.stderr)
+    assert result.returncode == 0 and 'panicked at' not in result.stderr and 'CRITICAL' not in result.stderr, result.stderr
+    assert 'NEXUTERM_SMOKE_EDITOR_COMPARE_OK' in result.stderr, result.stderr
+    assert remote.read_text() == 'def value():\n    return 142\n'
+    assert remote.stat().st_mode & 0o777 == 0o640
+    print(f'PASS GTK compare {theme}: three versions, cancel, stale original, explicit result, durable base, guarded save and permissions', flush=True)
 
 
 def gui_recovery(base, env, conflict):
@@ -119,6 +142,8 @@ def gui_recovery(base, env, conflict):
         assert stored["source"]["fingerprint"] == hashlib.sha256(changes.encode()).hexdigest()
         assert stored["text"] == changes + "# siguiente edición\n"
     else:
+        assert "NEXUTERM_SMOKE_LEGACY_COMPARISON_OK" in result.stderr
+        assert stored["base_text"] == expected
         assert stored["text"] == changes
     print("PASS GTK " + mode + ": explicit authenticated binding, guarded save and durable baseline")
 

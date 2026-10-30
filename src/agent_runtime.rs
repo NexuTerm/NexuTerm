@@ -47,7 +47,9 @@ pub(crate) async fn run(
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
     busy: Arc<AtomicBool>,
+    restoring: bool,
 ) -> Result<(), ()> {
+    let identity=crate::chat_state::destination(&agent);
     if agent.kind == crate::ai_config::AiKind::Local {
         let name = std::path::Path::new(&agent.program)
             .file_name()
@@ -66,7 +68,7 @@ pub(crate) async fn run(
         }
     }
     if agent.kind.is_api() {
-        api(agent, commands, events, busy).await
+        api(agent, commands, events, busy, identity).await
     } else {
         let key = if agent.wait_credentials {
             loop {
@@ -83,7 +85,7 @@ pub(crate) async fn run(
         } else {
             zeroize::Zeroizing::new(String::new())
         };
-        acp(agent, writable, commands, events, busy, key).await
+        acp(agent, writable, commands, events, busy, key, identity, restoring).await
     }
 }
 async fn api(
@@ -91,6 +93,7 @@ async fn api(
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
     busy: Arc<AtomicBool>,
+    identity: String,
 ) -> Result<(), ()> {
     emit(
         &events,
@@ -135,6 +138,14 @@ async fn api(
                     emit(&events, Event::Error(error)).await?;
                 }
             },
+            Some(Command::Restore(state)) => {
+                let result=state.validate().and_then(|_|match state {
+                    crate::chat_state::Continuation::Api{destination,messages} if destination==identity && loaded=>{history=messages;Ok(())},
+                    _=>Err("El contexto no corresponde a este perfil/API".into()),
+                });
+                busy.store(false,Ordering::Relaxed);
+                match result {Ok(())=>{emit(&events,Event::Continued).await?;},Err(error)=>emit(&events,Event::Error(error)).await?,}
+            }
             Some(Command::Send(text, model, _, _)) => {
                 if !loaded {
                     busy.store(false, Ordering::Relaxed);
@@ -162,6 +173,7 @@ async fn api(
                         )
                         .await?;
                         history = messages;
+                        emit(&events,Event::Continuation(crate::chat_state::Continuation::Api{destination:identity.clone(),messages:history.clone()})).await?;
                         emit(&events, Event::Finished("completed".into())).await?;
                     }
                     Some(Err(error)) => {
@@ -291,6 +303,57 @@ fn collect_options(options: &Value, out: &mut Vec<Value>) {
         }
     }
 }
+fn acp_tool_item(update: &Value) -> Value {
+    let kind = update["kind"].as_str().unwrap_or("other");
+    let title = update["title"]
+        .as_str()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or("Herramienta")
+        .trim()
+        .trim_start_matches('$')
+        .trim();
+    let content = update["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item["content"]["text"]
+                .as_str()
+                .or_else(|| item["content"]["diff"].as_str())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if kind == "execute"
+        && let Some(command) = update["rawInput"]["command"].as_str()
+    {
+        return json!({
+            "type":"commandExecution",
+            "id":update["toolCallId"],
+            "command":command,
+            "aggregatedOutput":if content.is_empty(){"En curso…"}else{&content},
+        });
+    }
+    let output = if content.is_empty() {
+        update["rawOutput"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                (!update["rawOutput"].is_null())
+                    .then(|| serde_json::to_string_pretty(&update["rawOutput"]).unwrap_or_default())
+            })
+            .unwrap_or_else(|| "En curso…".into())
+    } else {
+        content
+    };
+    json!({
+        "type":"agentToolCall",
+        "id":update["toolCallId"],
+        "kind":kind,
+        "title":title,
+        "input":update["rawInput"],
+        "output":output,
+    })
+}
 async fn acp(
     agent: AiAgent,
     mut writable: bool,
@@ -298,6 +361,8 @@ async fn acp(
     events: mpsc::Sender<Event>,
     busy: Arc<AtomicBool>,
     key: zeroize::Zeroizing<String>,
+    identity: String,
+    restoring: bool,
 ) -> Result<(), ()> {
     let root = crate::agent_profile::prepare(&agent).map_err(|_| ())?;
     let copilot = std::path::Path::new(&agent.program)
@@ -353,6 +418,9 @@ async fn acp(
     let mut seq = 0;
     request(&mut input,&mut pending,&mut seq,"initialize",json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"NexuTerm","version":env!("CARGO_PKG_VERSION")}})).await?;
     let mut want_login = false;
+    let mut load_supported=false;
+    let mut resume_supported=false;
+    let mut loading=false;
     let mut session = String::new();
     let mut model_option = String::new();
     let mut model_current = String::new();
@@ -405,7 +473,7 @@ async fn acp(
              authenticated=true;
              if copilot {emit(&events,Event::Account(copilot_account(&root).await)).await?;}
              emit(&events,Event::Authenticated(true)).await?;
-             if !pending.values().any(|m|m=="initialize"){request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},Some(Err(error))=>emit(&events,Event::Error(error)).await?,None=>emit(&events,Event::Status("Inicio de sesión cancelado.".into())).await?}
+             if !pending.values().any(|m|m=="initialize"){if restoring {busy.store(false,Ordering::Relaxed);emit(&events,Event::Ready(true)).await?;}else{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}}},Some(Err(error))=>emit(&events,Event::Error(error)).await?,None=>emit(&events,Event::Status("Inicio de sesión cancelado.".into())).await?}
           }else if let Some(method)=auth.first().and_then(|a|a["id"].as_str()){busy.store(true,Ordering::Relaxed);request(&mut input,&mut pending,&mut seq,"authenticate",json!({"methodId":method})).await?;}else{emit(&events,Event::Status("Este agente no ofrece inicio de sesión web por ACP. Configura sus credenciales en el perfil.".into())).await?;}},
           Some(Command::Interrupt)=>{stopping=true;write(&mut input,json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}})).await?;},
           Some(Command::Reply(reply))=>{let id=reply["id"].clone();if let Some(params)=permission_requests.remove(&id.to_string()){
@@ -417,22 +485,35 @@ async fn acp(
            else if !model.is_empty()&&model!=model_current{
             let (method,params)=if model_option.is_empty(){("session/set_model",json!({"sessionId":session,"modelId":model}))}else{("session/set_config_option",json!({"sessionId":session,"configId":model_option,"value":model}))};request(&mut input,&mut pending,&mut seq,method,params).await?;
            }else{let mode=if writable{"build"}else{"plan"};if modes.iter().any(|v|v==mode){request(&mut input,&mut pending,&mut seq,"session/set_mode",json!({"sessionId":session,"modeId":mode})).await?;}else{send_prompt(&mut input,&mut pending,&mut seq,&session,&agent,&mut queued,&mut item).await?;}}
-          },Some(Command::Logout)=>{busy.store(false,Ordering::Relaxed);},Some(Command::Resume(_))=>{}
+          },Some(Command::Restore(state))=>{
+            let result=state.validate().and_then(|_|match state {crate::chat_state::Continuation::Acp{destination,session_id} if destination==identity && (load_supported||resume_supported)=>Ok(session_id),_=>Err("Este agente no permite cargar la sesión o el destino ha cambiado".to_owned())});
+            match result {Ok(id)=>{session=id;loading=true;request(&mut input,&mut pending,&mut seq,if resume_supported{"session/resume"}else{"session/load"},json!({"sessionId":session,"cwd":directory,"mcpServers":mcp})).await?;},Err(error)=>{busy.store(false,Ordering::Relaxed);emit(&events,Event::Error(error)).await?;}}
+          },Some(Command::Logout)=>{busy.store(false,Ordering::Relaxed);},Some(Command::Resume(_, _))|Some(Command::History(_))=>{}
          }},
          frame=frames.recv()=>{let Some(frame)=frame else{return Err(());};activity=tokio::time::Instant::now();
           if let Some(method)=frame["method"].as_str(){let params=&frame["params"];
            if frame.get("id").is_some(){let id=frame["id"].clone();if method=="session/request_permission"{
+            if loading {write(&mut input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}})).await?;continue;}
             if permission_requests.len()>=8{return Err(());}
-            permission_requests.insert(id.to_string(),params.clone());let operation=serde_json::to_string_pretty(&params["toolCall"]).unwrap_or_default();
+            permission_requests.insert(id.to_string(),params.clone());
             let mut permission_operation=params["toolCall"].clone();
             if let Some(operation)=permission_operation.as_object_mut(){for field in ["toolCallId","status","content"]{operation.remove(field);}}
             if !writable{write(&mut input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}})).await?;permission_requests.remove(&id.to_string());emit(&events,Event::Status("Herramienta rechazada: conversación de solo lectura.".into())).await?;}
-            else{emit(&events,Event::Request{id,method:"item/commandExecution/requestApproval".into(),params:json!({"command":operation,"approvalOperation":permission_operation,"cwd":directory,"reason":"Solicitud de herramienta del agente ACP; revisa su entrada completa."})}).await?;}
+            else{
+             let kind=permission_operation["kind"].as_str().unwrap_or("other");
+             let method=if kind=="execute"{"item/commandExecution/requestApproval"}else{"item/tool/requestApproval"};
+             let params=if kind=="execute"{
+              json!({"command":permission_operation["rawInput"]["command"],"approvalOperation":permission_operation,"cwd":directory,"reason":"Solicitud de comando del agente ACP; revisa su entrada completa."})
+             }else{
+              json!({"toolCall":permission_operation,"cwd":directory,"reason":"Solicitud de herramienta del agente ACP; revisa su entrada completa."})
+             };
+             emit(&events,Event::Request{id,method:method.into(),params}).await?;
+            }
            }else{write(&mut input,json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Unsupported client capability"}})).await?;}continue;}
-           if method=="session/update"{let update=&params["update"];match update["sessionUpdate"].as_str().unwrap_or(""){
+           if method=="session/update"{if loading || session.is_empty(){continue;}let update=&params["update"];match update["sessionUpdate"].as_str().unwrap_or(""){
             "usage_update"=>{if let (Some(used),Some(size))=(update["used"].as_u64(),update["size"].as_u64()){emit(&events,Event::ContextUsage{used,size}).await?;}},
             "agent_message_chunk"=>{if let Some(text)=update["content"]["text"].as_str(){emit(&events,Event::Delta{item:format!("acp-{item}"),text:text.into()}).await?;}},
-            "tool_call"|"tool_call_update"=>{emit(&events,Event::Item(json!({"type":"commandExecution","id":update["toolCallId"],"command":update["title"].as_str().unwrap_or("Herramienta"),"aggregatedOutput":update["content"].as_array().map(|items|items.iter().filter_map(|i|i["content"]["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default()}))).await?;},_=>{}
+            "tool_call"|"tool_call_update"=>{emit(&events,Event::Item(acp_tool_item(update))).await?;},_=>{}
            }}continue;
           }
           let Some(id)=frame["id"].as_u64()else{continue;};let Some(method)=pending.remove(&id)else{continue;};
@@ -442,16 +523,16 @@ async fn acp(
            emit(&events,Event::Error(format!("El agente rechazó {method} ({}). Revisa cuenta, modelo y capacidades.",frame["error"]["code"]))).await?;if method=="initialize"{return Err(());}continue;}
           let result=&frame["result"];
           match method.as_str(){
-           "initialize"=>{auth=result["authMethods"].as_array().cloned().unwrap_or_default();if want_login&&!auth.is_empty(){want_login=false;request(&mut input,&mut pending,&mut seq,"authenticate",json!({"methodId":auth[0]["id"]})).await?;}else{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},
-           "authenticate"=>{authenticated=true;emit(&events,Event::Authenticated(true)).await?;request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;},
-           "session/new"=>{session=result["sessionId"].as_str().ok_or(())?.into();
+           "initialize"=>{load_supported=result["agentCapabilities"]["loadSession"]==true;resume_supported=result["agentCapabilities"]["sessionCapabilities"]["resume"].is_object();auth=result["authMethods"].as_array().cloned().unwrap_or_default();if want_login&&!auth.is_empty(){want_login=false;request(&mut input,&mut pending,&mut seq,"authenticate",json!({"methodId":auth[0]["id"]})).await?;}else{if restoring {busy.store(false,Ordering::Relaxed);emit(&events,Event::Ready(true)).await?;}else{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}}},
+           "authenticate"=>{authenticated=true;emit(&events,Event::Authenticated(true)).await?;if restoring {busy.store(false,Ordering::Relaxed);emit(&events,Event::Ready(true)).await?;}else{request(&mut input,&mut pending,&mut seq,"session/new",json!({"cwd":directory,"mcpServers":mcp})).await?;}},
+           "session/new"|"session/load"|"session/resume"=>{if method=="session/new"{session=result["sessionId"].as_str().ok_or(())?.into();}else{loading=false;}emit(&events,Event::Continuation(crate::chat_state::Continuation::Acp{destination:identity.clone(),session_id:session.clone()})).await?;
             let mut catalog=Vec::new();if let Some(options)=result["configOptions"].as_array(){for option in options{match option["category"].as_str().unwrap_or(""){
              "model"=>{model_option=option["id"].as_str().unwrap_or("model").into();model_current=option["currentValue"].as_str().unwrap_or("").into();collect_options(&option["options"],&mut catalog);},
              "mode"=>{if let Some(options)=option["options"].as_array(){modes=options.iter().filter_map(|v|v["value"].as_str().map(String::from)).collect();}},_=>{}
             }}}
             if catalog.is_empty()&& let Some(models)=result["models"]["availableModels"].as_array(){for m in models{if let Some(id)=m["modelId"].as_str(){catalog.push(json!({"model":id,"displayName":m["name"].as_str().unwrap_or(id),"supportedReasoningEfforts":[]}));}}}
             for model in configured_models(&agent){if !catalog.iter().any(|v|v["model"]==model["model"]){catalog.push(model);}}
-            emit(&events,Event::Models(catalog)).await?;busy.store(false,Ordering::Relaxed);emit(&events,Event::Ready(true)).await?;
+            emit(&events,Event::Models(catalog)).await?;busy.store(false,Ordering::Relaxed);if method!="session/new"{emit(&events,Event::Continued).await?;}emit(&events,Event::Ready(true)).await?;
            },
            "session/set_model"|"session/set_config_option"=>{
             if let Some((_,model))=&queued{model_current=model.clone();}
@@ -568,8 +649,8 @@ async fn send_prompt(
 ) -> Result<(), ()> {
     if let Some((text, _)) = queued.take() {
         *item += 1;
-        let text = if *item == 1 && !agent.system_prompt.is_empty() {
-            format!("{}\n\n{text}", agent.system_prompt)
+        let text = if *item == 1 {
+            format!("{}\n\n{text}", ai::system_instructions(agent))
         } else {
             text
         };
@@ -583,4 +664,35 @@ async fn send_prompt(
         .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acp_tool_items_distinguish_commands_from_other_tools() {
+        let command = acp_tool_item(&json!({
+            "toolCallId":"exec-1",
+            "kind":"execute",
+            "title":"$Comando",
+            "rawInput":{"command":"cargo test"},
+            "content":[{"type":"content","content":{"type":"text","text":"Tests passed"}}]
+        }));
+        assert_eq!(command["type"], "commandExecution");
+        assert_eq!(command["command"], "cargo test");
+        assert_eq!(command["aggregatedOutput"], "Tests passed");
+
+        let tool = acp_tool_item(&json!({
+            "toolCallId":"search-1",
+            "kind":"search",
+            "title":"$Herramienta",
+            "rawInput":{"query":"gtk"},
+            "content":[{"type":"content","content":{"type":"text","text":"Found results"}}]
+        }));
+        assert_eq!(tool["type"], "agentToolCall");
+        assert_eq!(tool["title"], "Herramienta");
+        assert_eq!(tool["input"]["query"], "gtk");
+        assert_eq!(tool["output"], "Found results");
+    }
 }

@@ -13,11 +13,20 @@ pub const MAX_CONTEXT: usize = 256 * 1024;
 pub const MAX_MESSAGES: usize = 64;
 const MAX_RESPONSE: usize = 1024 * 1024;
 pub const OPENCODE_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
+const CHAT_STYLE_INSTRUCTIONS: &str = "Responde de forma natural, clara, directa y colaborativa, como en el chat de Codex. Usa el idioma del usuario y Markdown cuando facilite la lectura. No muestres nombres internos ni etiquetas de herramientas como «$Comando» o «$Herramienta», ni presentes llamadas a herramientas o comandos como respuesta final; explica el resultado relevante en lenguaje normal.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub content: String,
+}
+
+pub fn system_instructions(agent: &AiAgent) -> String {
+    if agent.system_prompt.trim().is_empty() {
+        CHAT_STYLE_INSTRUCTIONS.into()
+    } else {
+        format!("{}\n\n{}", agent.system_prompt.trim(), CHAT_STYLE_INSTRUCTIONS)
+    }
 }
 
 pub fn request_body(agent: &AiAgent, history: &[Message]) -> Result<Value, String> {
@@ -30,7 +39,8 @@ pub fn request_body(agent: &AiAgent, history: &[Message]) -> Result<Value, Strin
     }
     if history.is_empty()
         || history.len() > MAX_MESSAGES
-        || history.iter().map(|m| m.content.len()).sum::<usize>() + agent.system_prompt.len()
+        || history.iter().map(|m| m.content.len()).sum::<usize>()
+            + system_instructions(agent).len()
             > MAX_CONTEXT
         || history
             .iter()
@@ -39,15 +49,13 @@ pub fn request_body(agent: &AiAgent, history: &[Message]) -> Result<Value, Strin
         return Err("Conversación fuera de límites. Inicia una nueva conversación (máximo 64 mensajes o 256 KiB).".into());
     }
     let mut messages = history.to_vec();
-    if !agent.system_prompt.is_empty() {
-        messages.insert(
-            0,
-            Message {
-                role: "system".into(),
-                content: agent.system_prompt.clone(),
-            },
-        );
-    }
+    messages.insert(
+        0,
+        Message {
+            role: "system".into(),
+            content: system_instructions(agent),
+        },
+    );
     Ok(match agent.kind {
         AiKind::Responses => json!({
             "model": agent.model, "input": messages,
@@ -346,17 +354,16 @@ pub async fn exchange(
         return Err("Contexto máximo alcanzado; inicia otra conversación".into());
     }
     let responses = agent.kind == AiKind::Responses;
+    let instructions = system_instructions(agent);
     let mut messages = history.to_vec();
     let mut body = if responses {
         json!({"model":agent.model,"input":messages,"store":false,"max_output_tokens":agent.max_output_tokens})
     } else {
-        if !agent.system_prompt.is_empty() {
-            messages.insert(0, json!({"role":"system","content":agent.system_prompt}));
-        }
+        messages.insert(0, json!({"role":"system","content":instructions}));
         json!({"model":agent.model,"messages":messages,"max_tokens":agent.max_output_tokens,"stream":false})
     };
-    if responses && !agent.system_prompt.is_empty() {
-        body["instructions"] = json!(agent.system_prompt);
+    if responses {
+        body["instructions"] = json!(instructions);
     }
     if agent.terminal_access && agent.terminal_socket.is_some() {
         let tools=crate::terminal_mcp::tools().into_iter().map(|t|{let function=json!({"name":t["name"],"description":t["description"],"parameters":t["inputSchema"]});if responses{let mut t=function;t["type"]=json!("function");t}else{json!({"type":"function","function":function})}}).collect::<Vec<_>>();
@@ -469,9 +476,12 @@ mod tests {
         }];
         let body = request_body(&profile(AiKind::Responses), &history).unwrap();
         assert_eq!(body["store"], false);
-        assert_eq!(body["input"][0]["content"], history[0].content);
+        assert_eq!(body["input"][0]["role"], "system");
+        assert!(body["input"][0]["content"].as_str().unwrap().contains("chat de Codex"));
+        assert_eq!(body["input"][1]["content"], history[0].content);
         let body = request_body(&profile(AiKind::ChatCompletions), &history).unwrap();
-        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
         assert!(
             request_body(
                 &profile(AiKind::Responses),

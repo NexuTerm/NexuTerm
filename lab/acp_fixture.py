@@ -20,10 +20,22 @@ for line in sys.stdin:
     method, ident, params = value.get('method'), value.get('id'), value.get('params', {})
     result = {}
     if method == 'initialize':
-        result = dict(protocolVersion=1, agentCapabilities={}, authMethods=[dict(id='web', name='Web')])
+        result = dict(protocolVersion=1, agentCapabilities=(dict(loadSession=True) if Path('support-load').exists() else dict(sessionCapabilities=dict(resume={})) if Path('support-resume').exists() else {}), authMethods=[dict(id='web', name='Web')])
     elif method == 'session/new':
         assert Path(params['cwd']).is_absolute()
         result = dict(sessionId='fixture-session', configOptions=config_options)
+    elif method in ('session/load', 'session/resume'):
+        assert params['sessionId'] == 'fixture-session'
+        assert Path(params['cwd']).is_absolute()
+        if Path('load-disconnect').exists():
+            sys.exit(0)
+        if Path('load-failure').exists():
+            emit(dict(id=ident, jsonrpc='2.0', error=dict(code=-32000, message='Fixture failure')))
+            continue
+        if method == 'session/load':
+            emit(dict(jsonrpc='2.0', id='replay-permission', method='session/request_permission', params=dict(sessionId='fixture-session', toolCall=dict(toolCallId='replay-tool', title='Never execute', kind='execute', rawInput=dict(command='false')), options=[dict(kind='allow_once', optionId='yes'),dict(kind='reject_once', optionId='no')])))
+            emit(dict(jsonrpc='2.0', method='session/update', params=dict(sessionId='fixture-session', update=dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='Replayed, not a new message')))))
+        result = dict(configOptions=config_options)
     elif method == 'session/set_config_option':
         assert params['value'] == 'fixture/two'
         result = dict(configOptions=config_options)
@@ -32,10 +44,12 @@ for line in sys.stdin:
     elif method == 'session/prompt':
         turn_id = ident
         text = params['prompt'][0]['text'].split('\n\nContexto de trabajo')[0]
-        if text == 'approval':
+        # The first ACP prompt also carries system instructions before the test message.
+        trigger = text.rsplit('\n\n', 1)[-1]
+        if trigger == 'approval':
             emit(dict(jsonrpc='2.0', id='permission', method='session/request_permission', params=dict(sessionId='fixture-session', toolCall=dict(toolCallId='tool-1', title='Fake command', kind='execute', rawInput=dict(command='printf fixture')), options=[dict(kind='allow_once', optionId='yes', name='Permitir'), dict(kind='reject_once', optionId='no', name='Rechazar')])))
             continue
-        if text == 'interrupt':
+        if trigger == 'interrupt':
             continue
         answer = Path('markdown-response').read_text() if Path('markdown-response').exists() else 'Respuesta ACP gráfica.'
         middle = len(answer) // 2
@@ -45,6 +59,9 @@ for line in sys.stdin:
         continue
     elif method == 'session/cancel':
         emit(dict(jsonrpc='2.0', id=turn_id, result=dict(stopReason='cancelled')))
+        continue
+    elif method is None and ident == 'replay-permission':
+        assert value['result']['outcome'] == dict(outcome='cancelled')
         continue
     elif method is None and ident == 'permission':
         assert value['result']['outcome'] in (dict(outcome='selected', optionId='no'), dict(outcome='cancelled'))

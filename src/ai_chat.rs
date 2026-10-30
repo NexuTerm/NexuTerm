@@ -20,6 +20,7 @@ fn bubble(list: &gtk::Box, title: &str, text: &str) -> gtk::Label {
     label.set_wrap(true);
     label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     label.set_selectable(true);
+    crate::context_menu::message(&label);
     label.set_xalign(0.0);
     group.append(&heading);
     group.append(&label);
@@ -37,6 +38,7 @@ fn bubble(list: &gtk::Box, title: &str, text: &str) -> gtk::Label {
 pub(super) fn build(state: &Rc<State>, process: &Rc<ai_panel::Process>) -> Chat {
     let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let conversation = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    crate::context_menu::conversation(&conversation);
     let scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
         .hscrollbar_policy(gtk::PolicyType::Never)

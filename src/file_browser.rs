@@ -1,4 +1,4 @@
-//! Local/remote panes shared by the standalone FTP and SFTP views.
+//! Main local explorer and file transfer controls.
 use crate::{
     remote_panel::Panel,
     ui::{State, icon_button},
@@ -15,6 +15,10 @@ const PRIORITY: glib::Priority = glib::Priority::DEFAULT;
 pub struct LocalPane {
     pub widget: gtk::Box,
     current: RefCell<PathBuf>,
+    pending_view: Rc<RefCell<Option<nexuterm::workspaces::BrowserView>>>,
+    view_epoch: Rc<Cell<u64>>,
+    pending_directory: RefCell<Option<PathBuf>>,
+    requested_directory: RefCell<Option<PathBuf>>,
     path: gtk::Entry,
     list: gtk::ListBox,
     entries: RefCell<Vec<Entry>>,
@@ -22,7 +26,8 @@ pub struct LocalPane {
     busy: Cell<bool>,
     next: gtk::Button,
     status: gtk::Label,
-    remote: Weak<Panel>,
+    remote: RefCell<Weak<Panel>>,
+    upload_button: gtk::Button,
     cancel: gio::Cancellable,
     state: Weak<State>,
     standalone: bool,
@@ -33,6 +38,83 @@ pub struct LocalPane {
     features_test_started: Cell<bool>,
 }
 impl LocalPane {
+    pub fn workspace_directory(&self) -> PathBuf {
+        self.pending_directory
+            .borrow()
+            .clone()
+            .or_else(|| self.requested_directory.borrow().clone())
+            .unwrap_or_else(|| self.directory())
+    }
+    pub fn workspace_view(&self) -> nexuterm::workspaces::BrowserView {
+        if let Some(view) = self.pending_view.borrow().clone() {
+            return view;
+        }
+        let selected = self
+            .list
+            .selected_rows().into_iter().next()
+            .and_then(|r| {
+                self.entries
+                    .borrow()
+                    .get(r.index() as usize)
+                    .map(|e| e.name.clone())
+            })
+            .filter(|p| p.to_str().is_some());
+        crate::widget_state::browser(self.widget.upcast_ref(), self.hidden.is_active(), selected)
+    }
+    pub fn restore_workspace(
+        self: &Rc<Self>,
+        directory: PathBuf,
+        view: Option<nexuterm::workspaces::BrowserView>,
+    ) {
+        self.view_epoch.set(self.view_epoch.get().wrapping_add(1));
+        if self.busy.get() {
+            *self.pending_directory.borrow_mut() = Some(directory);
+        } else {
+            self.navigate(directory);
+        }
+        if let Some(view) = &view {
+            self.hidden.set_active(view.hidden);
+        }
+        *self.pending_view.borrow_mut() = view;
+    }
+    fn restart_pending(self: &Rc<Self>) -> bool {
+        let directory = self.pending_directory.borrow_mut().take();
+        let Some(directory) = directory else {
+            return false;
+        };
+        let view = self.pending_view.borrow_mut().take();
+        self.navigate(directory);
+        *self.pending_view.borrow_mut() = view;
+        true
+    }
+    fn apply_pending_view(&self) {
+        let Some(mut view) = self.pending_view.borrow().clone() else {
+            return;
+        };
+        self.hidden.set_active(view.hidden);
+        self.list.unselect_all();
+        if let Some(index) = view
+            .selected
+            .as_ref()
+            .and_then(|name| self.entries.borrow().iter().position(|e| &e.name == name))
+        {
+            if let Some(row) = self.list.row_at_index(index as i32) {
+                self.list.select_row(Some(&row));
+            }
+        }
+        view.selected = self.list.selected_rows().into_iter().next().and_then(|r| {
+            self.entries
+                .borrow()
+                .get(r.index() as usize)
+                .map(|e| e.name.clone())
+        });
+        *self.pending_view.borrow_mut() = Some(view);
+        crate::widget_state::restore_browser_scroll(
+            self.widget.upcast_ref(),
+            self.pending_view.clone(),
+            self.view_epoch.clone(),
+        );
+    }
     pub fn apply_preferences(&self, preferences: &nexuterm::config::Preferences) {
         apply_columns(self.widget.upcast_ref(), preferences);
         self.hidden.set_active(preferences.browser_show_hidden);
@@ -76,19 +158,22 @@ impl LocalPane {
     pub fn directory(&self) -> PathBuf {
         self.current.borrow().clone()
     }
-    pub fn selected_file(&self) -> Option<PathBuf> {
-        let row = self.list.selected_row()?;
+    pub fn selected_paths(&self) -> Vec<PathBuf> {
         let entries = self.entries.borrow();
-        let entry = entries.get(row.index() as usize)?;
-        entry
-            .regular
-            .then(|| self.current.borrow().join(&entry.name))
+        let mut paths = Vec::new();
+        for row in self.list.selected_rows() {
+            let Some(entry) = entries.get(row.index() as usize) else {
+                return Vec::new();
+            };
+            if !entry.regular && !entry.directory {
+                return Vec::new();
+            }
+            paths.push(self.directory().join(&entry.name));
+        }
+        paths
     }
     pub fn refresh(self: &Rc<Self>) {
         self.navigate(self.directory());
-    }
-    pub fn stop(&self) {
-        self.cancel.cancel();
     }
     pub fn local(state: &Rc<State>) -> Rc<Self> {
         Self::new(state, None)
@@ -98,8 +183,8 @@ impl LocalPane {
         widget.add_css_class("nexuterm-section");
         widget.add_css_class("nexuterm-panel");
         widget.add_css_class("local-explorer");
-        widget.set_margin_top(2);
-        widget.set_margin_bottom(8);
+        widget.set_margin_top(0);
+        widget.set_margin_bottom(0);
         widget.set_width_request(240);
         let title = gtk::Label::new(Some("ARCHIVOS LOCALES"));
         title.set_xalign(0.0);
@@ -128,7 +213,7 @@ impl LocalPane {
         path.set_tooltip_text(Some("Carpeta local · Enter para abrir"));
         widget.append(&path);
         let list = gtk::ListBox::new();
-        list.set_selection_mode(gtk::SelectionMode::Single);
+        list.set_selection_mode(gtk::SelectionMode::Multiple);
         list.set_activate_on_single_click(false);
         list.add_css_class("file-details");
         list.set_overflow(gtk::Overflow::Hidden);
@@ -219,6 +304,10 @@ impl LocalPane {
         state.operations.borrow_mut().push(cancel.downgrade());
         let panel = Rc::new(Self {
             widget,
+            pending_view: Rc::new(RefCell::new(None)),
+            view_epoch: Rc::new(Cell::new(0)),
+            pending_directory: RefCell::new(None),
+            requested_directory: RefCell::new(None),
             current: RefCell::new(if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some() {
                 std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER_LOCAL")
                     .map(PathBuf::from)
@@ -233,7 +322,8 @@ impl LocalPane {
             busy: Cell::new(false),
             next,
             status,
-            remote: remote.map(Rc::downgrade).unwrap_or_default(),
+            remote: RefCell::new(remote.map(Rc::downgrade).unwrap_or_default()),
+            upload_button: upload.clone(),
             state: Rc::downgrade(state),
             standalone: remote.is_none(),
             hidden,
@@ -310,33 +400,105 @@ impl LocalPane {
                 }
             }
         });
+        let weak = Rc::downgrade(&panel);
+        let source = move || {
+            let pane = weak.upgrade()?;
+            let paths=pane.selected_paths();if paths.is_empty() || paths.len()>128{return None;}
+            Some(paths.into_iter().map(|p|gio::File::for_path(p).uri().to_string()).collect::<Vec<_>>().join("\n"))
+        };
+        let weak = Rc::downgrade(&panel);
+        transfer_controls(&panel.widget, &panel.list, source, move |text| {
+            let Some(pane) = weak.upgrade() else {
+                return false;
+            };
+            let Some(state) = pane.state.upgrade() else {
+                return false;
+            };
+            for remote in state
+                .remote_browsers
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+            {
+                if remote.paste_download(text, pane.directory()) {
+                    return true;
+                }
+            }
+            false
+        });
         panel.refresh();
         panel
     }
     #[cfg(debug_assertions)]
+    pub fn smoke_select_many(&self, names: &[&str]) {
+        self.list.unselect_all();
+        for name in names {
+            let index = self
+                .entries
+                .borrow()
+                .iter()
+                .position(|e| e.name == std::path::Path::new(name))
+                .expect(name);
+            self.list
+                .select_row(self.list.row_at_index(index as i32).as_ref());
+        }
+        assert_eq!(self.selected_paths().len(), names.len());
+    }
+    #[cfg(debug_assertions)]
+    pub fn smoke_copy_many(&self, names: &[&str]) {
+        self.smoke_select_many(names);
+        smoke_key(&self.list, gtk::gdk::Key::c);
+    }
+    #[cfg(debug_assertions)]
+    pub fn smoke_drag_many(&self, names: &[&str], target: &gtk::Box) {
+        self.smoke_select_many(names);
+        smoke_drag(&self.list, target);
+    }
+    #[cfg(debug_assertions)]
     pub fn smoke_upload(&self, name: &str) {
+        self.smoke_select(name);
+        self.upload();
+    }
+    #[cfg(debug_assertions)]
+    pub fn smoke_copy(&self, name: &str) {
+        self.smoke_select(name);
+        smoke_button(&self.widget, "Copiar archivo · Ctrl+C").emit_clicked();
+    }
+    #[cfg(debug_assertions)]
+    pub fn smoke_drag(&self, name: &str, target: &gtk::Box) {
+        self.smoke_select(name);
+        smoke_drag(&self.list, target);
+    }
+    #[cfg(debug_assertions)]
+    fn smoke_select(&self, name: &str) {
         let index = self
             .entries
             .borrow()
             .iter()
             .position(|entry| entry.name == std::path::Path::new(name))
             .expect("Local upload fixture listed");
-        self.list
-            .select_row(self.list.row_at_index(index as i32).as_ref());
-        self.upload();
+        self.list.unselect_all();
+        self.list.select_row(self.list.row_at_index(index as i32).as_ref());
+    }
+    pub fn bind_remote(&self, remote: Option<&Rc<Panel>>) {
+        *self.remote.borrow_mut() = remote.map(Rc::downgrade).unwrap_or_default();
+        self.upload_button.set_visible(remote.is_some());
     }
     fn upload(&self) {
-        if let (Some(remote), Some(path)) = (self.remote.upgrade(), self.selected_file()) {
-            remote.upload_file(path);
-        } else {
-            self.status
-                .set_text("Selecciona un archivo local para subir.");
+        let paths=self.selected_paths();
+        if let Some(remote)=self.remote.borrow().upgrade() {
+            if !paths.is_empty() {remote.upload_files(paths);return;}
         }
+        self.status.set_text("Selecciona archivos o carpetas regulares para subir; no se siguen enlaces");self.status.set_visible(true);
     }
     pub fn navigate(self: &Rc<Self>, directory: PathBuf) {
         if self.busy.replace(true) || self.cancel.is_cancelled() {
             return;
         }
+        self.view_epoch.set(self.view_epoch.get().wrapping_add(1));
+        self.pending_view.borrow_mut().take();
+        self.pending_directory.borrow_mut().take();
+        *self.requested_directory.borrow_mut()=Some(if directory.is_absolute() {directory.clone()} else {self.directory().join(&directory)});
         self.widget.set_sensitive(false);
         let p = Rc::downgrade(self);
         let cancel = self.cancel.clone();
@@ -362,6 +524,8 @@ impl LocalPane {
                 if cancel.is_cancelled() {
                     return;
                 }
+                if p.restart_pending() {return;}
+                p.requested_directory.borrow_mut().take();
                 match result {
                     Ok(cursor) => {
                         *p.cursor.borrow_mut() = Some(cursor);
@@ -399,6 +563,7 @@ impl LocalPane {
                 if p.cancel.is_cancelled() {
                     return;
                 }
+                if p.restart_pending() {return;}
                 match result {
                     Err(error) => {
                         p.status.set_text(&error.to_string());
@@ -425,7 +590,7 @@ impl LocalPane {
                                 .cmp(&a.directory)
                                 .then_with(|| a.name.cmp(&b.name))
                         });
-                        while let Some(row) = p.list.first_child() {
+                        while let Some(row) = p.list.row_at_index(0) {
                             p.list.remove(&row);
                         }
                         for (index, entry) in entries.iter().enumerate() {
@@ -495,6 +660,7 @@ impl LocalPane {
                             );
                         }
                         p.list.invalidate_filter();
+                        p.apply_pending_view();
                         #[cfg(debug_assertions)]
                         if p.standalone
                             && std::env::var_os("NEXUTERM_SMOKE_BROWSER_FEATURES").is_some()
@@ -547,19 +713,13 @@ impl LocalPane {
     }
 }
 
-pub fn workspace(state: &Rc<State>, remote: &Rc<Panel>) -> (gtk::Paned, Rc<LocalPane>) {
-    let local = LocalPane::new(state, Some(remote));
-    remote.bind_local(&local);
-    let split = gtk::Paned::new(gtk::Orientation::Horizontal);
-    split.add_css_class("nexuterm-split");
-    split.set_hexpand(true);
-    split.set_vexpand(true);
-    split.set_position(400);
-    split.set_start_child(Some(&local.widget));
-    split.set_end_child(Some(&remote.widget));
-    split.set_shrink_start_child(false);
-    split.set_shrink_end_child(false);
-    (split, local)
+// Standalone FTP/SFTP tabs reuse the application's existing local explorer.
+pub fn workspace(state: &Rc<State>, remote: &Rc<Panel>) -> gtk::Box {
+    let local = state.local_files.borrow();
+    if let Some(local) = local.as_ref() {
+        remote.bind_local(local);
+    }
+    remote.widget.clone()
 }
 
 pub(crate) fn apply_columns(root: &gtk::Widget, preferences: &nexuterm::config::Preferences) {
@@ -879,4 +1039,157 @@ impl LocalPane {
             pane.refresh();
         });
     }
+}
+
+/// Copy/paste and drag/drop share the same validation and transfer path.
+pub(crate) fn transfer_controls(
+    root: &gtk::Box,
+    list: &gtk::ListBox,
+    source: impl Fn() -> Option<String> + 'static,
+    receive: impl Fn(&str) -> bool + 'static,
+) {
+    let source = Rc::new(source);
+    let receive = Rc::new(receive);
+    let drag = gtk::DragSource::builder()
+        .actions(gtk::gdk::DragAction::COPY)
+        .build();
+    let get = source.clone();
+    let rows = list.downgrade();
+    drag.connect_prepare(move |_, _, y| {
+        let list = rows.upgrade()?;
+        let row = list.row_at_y(y as i32)?;
+        if !row.is_selected() {list.unselect_all();list.select_row(Some(&row));}
+        Some(gtk::gdk::ContentProvider::for_value(&get()?.to_value()))
+    });
+    list.add_controller(drag);
+    let drop = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::COPY);
+    drop.set_types(&[String::static_type(), gtk::gdk::FileList::static_type()]);
+    let accept = receive.clone();
+    drop.connect_drop(move |_, value, _, _| {
+        if let Ok(text) = value.get::<String>() {
+            return accept(&text);
+        }
+        if let Ok(files) = value.get::<gtk::gdk::FileList>() {
+            let files = files.files();
+            return !files.is_empty() && files.len()<=128 && accept(&files.iter().map(|f|f.uri().to_string()).collect::<Vec<_>>().join("\n"));
+        }
+        false
+    });
+    root.add_controller(drop);
+    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    let copy = icon_button("edit-copy-symbolic", "Copiar archivo · Ctrl+C");
+    let paste = icon_button("edit-paste-symbolic", "Pegar archivo · Ctrl+V");
+    tools.append(&copy);
+    tools.append(&paste);
+    if let Some(toolbar) = root
+        .first_child()
+        .and_then(|child| child.next_sibling())
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+    {
+        toolbar.append(&tools);
+    }
+    let clipboard = root.clipboard();
+    let available = source.clone();
+    crate::context_menu::browser(root, list, move || available().is_some());
+    let get = source.clone();
+    copy.connect_clicked(move |_| {
+        if let Some(text) = get() {
+            clipboard.set_text(&text);
+        }
+    });
+    let clipboard = root.clipboard();
+    let accept = receive.clone();
+    paste.connect_clicked(move |_| {
+        let clipboard = clipboard.clone();
+        let accept = accept.clone();
+        glib::spawn_future_local(async move {
+            if let Ok(Some(text)) = clipboard.read_text_future().await {
+                accept(&text);
+            }
+        });
+    });
+    let keys = gtk::EventControllerKey::new();
+    keys.set_name(Some("file-transfer-shortcuts"));
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let clipboard = root.clipboard();
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
+        if modifiers == gtk::gdk::ModifierType::CONTROL_MASK {
+            if matches!(key, gtk::gdk::Key::c | gtk::gdk::Key::C) {
+                if let Some(text) = source() {
+                    clipboard.set_text(&text);
+                }
+                return glib::Propagation::Stop;
+            }
+            if matches!(key, gtk::gdk::Key::v | gtk::gdk::Key::V) {
+                let clipboard = clipboard.clone();
+                let accept = receive.clone();
+                glib::spawn_future_local(async move {
+                    if let Ok(Some(text)) = clipboard.read_text_future().await {
+                        accept(&text);
+                    }
+                });
+                return glib::Propagation::Stop;
+            }
+        }
+        glib::Propagation::Proceed
+    });
+    list.add_controller(keys);
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn smoke_button(root: &gtk::Box, tooltip: &str) -> gtk::Button {
+    fn find(widget: &gtk::Widget, tooltip: &str) -> Option<gtk::Button> {
+        if widget.tooltip_text().as_deref() == Some(tooltip) {
+            return widget.clone().downcast().ok();
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = find(&widget, tooltip) {
+                return Some(button);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    find(root.upcast_ref(), tooltip).expect("Transfer button")
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn smoke_drag(list: &gtk::ListBox, target: &gtk::Box) {
+    let controllers = list.observe_controllers();
+    let drag = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i)?.downcast::<gtk::DragSource>().ok())
+        .unwrap();
+    let row = list.selected_rows().into_iter().next().unwrap();
+    let bounds = row.compute_bounds(list).unwrap();
+    let provider = drag
+        .emit_by_name::<Option<gtk::gdk::ContentProvider>>(
+            "prepare",
+            &[&1.0_f64, &f64::from(bounds.y() + bounds.height() / 2.0)],
+        )
+        .unwrap();
+    let value = provider.value(String::static_type()).unwrap();
+    let controllers = target.observe_controllers();
+    let drop = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i)?.downcast::<gtk::DropTarget>().ok())
+        .unwrap();
+    assert!(drop.emit_by_name::<bool>("drop", &[&glib::BoxedValue(value), &1.0_f64, &1.0_f64]));
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn smoke_key(list: &gtk::ListBox, key: gtk::gdk::Key) {
+    let controllers = list.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|i| {
+            controllers
+                .item(i)?
+                .downcast::<gtk::EventControllerKey>()
+                .ok()
+        })
+        .find(|keys| keys.name().as_deref() == Some("file-transfer-shortcuts"))
+        .unwrap();
+    assert!(keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[&key, &0_u32, &gtk::gdk::ModifierType::CONTROL_MASK]
+    ));
 }

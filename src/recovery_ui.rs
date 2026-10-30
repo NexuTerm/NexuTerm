@@ -33,8 +33,10 @@ pub struct Tracker {
     pub id: String,
     pub root: glib::WeakRef<gtk::Box>,
     buffer: glib::WeakRef<gtk::TextBuffer>,
+    pending_view: Rc<Cell<Option<nexuterm::workspaces::EditorView>>>,
     status: glib::WeakRef<gtk::Label>,
     source: RefCell<Source>,
+    base: RefCell<Option<String>>,
     journal: Result<Arc<Journal>, String>,
     revision: Cell<u64>,
     persisted: Cell<u64>,
@@ -59,8 +61,10 @@ impl Tracker {
             id,
             root: root.downgrade(),
             buffer: buffer.downgrade(),
+            pending_view: Rc::new(Cell::new(None)),
             status: status.downgrade(),
             source: RefCell::new(source),
+            base: RefCell::new(None),
             journal,
             revision: Cell::new(0),
             persisted: Cell::new(0),
@@ -103,11 +107,27 @@ impl Tracker {
         self.revision.set(revision);
         revision
     }
+    pub fn workspace_view(&self) -> Option<nexuterm::workspaces::EditorView> {
+        self.pending_view.get().or_else(|| {
+            self.root
+                .upgrade()
+                .and_then(|root| crate::widget_state::editor(root.upcast_ref()))
+        })
+    }
+    pub fn restore_workspace_view(&self, view: nexuterm::workspaces::EditorView) {
+        self.pending_view.set(Some(view));
+        if self.enabled.get() {
+            if let Some(root) = self.root.upgrade() {
+                crate::widget_state::restore_editor(root.upcast_ref(), self.pending_view.clone());
+            }
+        }
+    }
     pub fn loaded(&self, etag: Option<String>) {
         if let Source::Local { etag: current, .. } = &mut *self.source.borrow_mut() {
             *current = etag;
         }
         self.enabled.set(true);
+        if let Some(root)=self.root.upgrade() {crate::widget_state::restore_editor(root.upcast_ref(),self.pending_view.clone());}
         self.advance();
     }
     fn needs_save(&self) -> bool {
@@ -140,6 +160,7 @@ impl Tracker {
             id: self.id.clone(),
             source: self.source.borrow().clone(),
             text: snapshot(&buffer)?,
+            base_text:self.base.borrow().clone(),
         };
         draft.validate()?;
         // New keystrokes may arrive during I/O: publish this bounded snapshot,
@@ -171,6 +192,8 @@ impl Tracker {
             .upgrade()
             .is_some_and(|buffer| buffer.is_modified())
     }
+    pub fn base(&self)->Option<String>{self.base.borrow().clone()}
+    pub fn set_base(&self,base:Option<String>){*self.base.borrow_mut()=base;self.advance();}
     pub fn source(&self) -> Source {
         self.source.borrow().clone()
     }
@@ -769,6 +792,7 @@ pub fn smoke_loaded(
                         status.text()
                     );
                     eprintln!("NEXUTERM_SMOKE_RECOVERY_REBIND_CONFLICT_OK");
+                    crate::editor_compare::smoke_recovered(root.upcast_ref(),&buffer,&tracker).await;
                 } else {
                     assert!(
                         save.is_sensitive(),

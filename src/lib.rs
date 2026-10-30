@@ -37,13 +37,10 @@ pub mod chat_state;
 #[cfg(feature="gui")]
 pub mod chat_history;
 
-
 #[cfg(feature="gui")]
 pub mod transfer_queue;
 
-
 pub mod text_diff;
-
 
 pub mod execution;
 pub mod execution_history;

@@ -63,6 +63,7 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
     Some(broker)
 }
 fn handle(state: &Rc<State>, request: Request, policies: &Grants) {
+    if matches!(request.name.as_str(),"supervised_targets"|"supervised_execute"){crate::supervised_ui::handle_mcp(state,request);return;}
     let targets = sessions(state);
     let active = state.focused_terminal.borrow().upgrade();
     if request.name == "terminal_list" {

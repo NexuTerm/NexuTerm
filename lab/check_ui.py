@@ -12,16 +12,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("scenario", choices=["colors", "sessions", "ssh", "splits", "close-splits", "menus", "rdp", "rdp-certificate", "sftp"])
+    parser.add_argument("scenario", choices=["tabs", "colors", "sessions", "ssh", "splits", "close-splits", "menus", "rdp", "rdp-certificate", "sftp"])
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--scale", choices=[1, 2], default=1, type=int)
     parser.add_argument("--theme", choices=["dark", "light"], default="dark")
+    parser.add_argument("--workspace", action="store_true", help="restore a saved SSH/RDP workspace before connecting")
     args = parser.parse_args()
+    if args.workspace and args.scenario not in ("ssh", "rdp", "rdp-certificate"):
+        parser.error("--workspace requires ssh or rdp")
     artifacts = ROOT / "artifacts"
     artifacts.mkdir(exist_ok=True)
     width, height = (1024, 768) if args.compact else (1280, 820)
     tag = "{}-{}-scale{}".format(args.scenario, width, args.scale)
-    if args.scenario == "colors":
+    if args.scenario in ("colors", "tabs"):
         tag += "-" + args.theme
     screenshot = artifacts / (tag + ".png")
     env = {k: v for k, v in os.environ.items() if not k.startswith("NEXUTERM_SMOKE") and k != "NEXUTERM_SCREENSHOT"}
@@ -35,7 +38,10 @@ def main():
         if args.compact:
             env["NEXUTERM_SMOKE_COMPACT"] = "1"
         marker = "NEXUTERM_SMOKE_CHILD_EXIT=0"
-        if args.scenario == "colors":
+        if args.scenario == "tabs":
+            env["NEXUTERM_SMOKE_TABS"] = "1"
+            marker = "NEXUTERM_SMOKE_TABS_OK"
+        elif args.scenario == "colors":
             env["NEXUTERM_SMOKE_COLORS"] = "1"
             marker = "NEXUTERM_SMOKE_COLORS_OK"
         elif args.scenario == "sessions":
@@ -65,9 +71,19 @@ def main():
             if args.scenario == "close-splits":
                 env["NEXUTERM_SMOKE_CLOSE_SPLITS"] = "1"
                 marker = "NEXUTERM_SMOKE_CLOSE_SPLITS_OK"
+        if args.workspace:
+            tag += "-workspace"
+            screenshot = artifacts / (tag + ".png")
+            env["NEXUTERM_SCREENSHOT"] = str(screenshot)
+            if args.scenario == "ssh":
+                env["NEXUTERM_SMOKE_WORKSPACE_SSH"] = "1"
+                marker = "NEXUTERM_SMOKE_WORKSPACE_SSH_OK"
+            else:
+                env["NEXUTERM_SMOKE_RDP_WORKSPACE"] = "1"
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 {}x{}x24".format(width * args.scale, height * args.scale), "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], env=env, cwd=ROOT, capture_output=True, text=True, timeout=30)
         (artifacts / (tag + ".log")).write_text(result.stdout + result.stderr)
-        if result.returncode or marker not in result.stderr or not screenshot.exists():
+        workspace_marker_ok = not args.workspace or args.scenario == "ssh" or "NEXUTERM_SMOKE_RDP_WORKSPACE_OK" in result.stderr
+        if result.returncode or marker not in result.stderr or not screenshot.exists() or not workspace_marker_ok:
             raise SystemExit("UI check failed; see artifacts/{}.log".format(tag))
         print("PASS {} — {}".format(tag, screenshot))
 

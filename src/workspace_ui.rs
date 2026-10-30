@@ -1,8 +1,76 @@
 //! Workspace snapshots are restored disconnected, without replaying commands.
 use super::*;
-use nexuterm::workspaces::{Layout, Store, Tab, Target, Workspace};
+use nexuterm::workspaces::{Layout, Store, Tab, Target, TerminalView, Workspace};
+
+fn find_terminal(widget: &gtk::Widget) -> Option<vte4::Terminal> {
+    if let Some(term) = widget.downcast_ref::<vte4::Terminal>() {
+        return Some(term.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(term) = find_terminal(&c) {
+            return Some(term);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+fn panel_focused(state: &State, widget: &gtk::Widget, fallback: bool) -> bool {
+    let Some(focused) = state.workspace_focus.borrow().upgrade() else {
+        return fallback;
+    };
+    let same_page = (0..state.notebook.n_pages())
+        .map(|i| state.notebook.nth_page(i).child())
+        .any(|page| {
+            (widget == &page || widget.is_ancestor(&page))
+                && (focused == page || focused.is_ancestor(&page))
+        });
+    if same_page {
+        focused == *widget
+    } else {
+        fallback
+    }
+}
+
+pub(super) fn panel_for_terminal(
+    state: &State,
+    widget: &gtk::Widget,
+) -> Option<Rc<crate::remote_panel::Panel>> {
+    if let Some(panel) = state
+        .workspace_panels
+        .borrow()
+        .iter()
+        .find_map(|(root, panel)| {
+            root.upgrade()
+                .filter(|root| widget == root || widget.is_ancestor(root))
+                .map(|_| panel.clone())
+        })
+    {
+        return Some(panel);
+    }
+    let remote = state
+        .remote_panels
+        .borrow()
+        .iter()
+        .find_map(|(page, remote)| {
+            page.upgrade()
+                .filter(|page| widget == page || widget.is_ancestor(page))
+                .and_then(|_| remote.upgrade())
+        })?;
+    state
+        .remote_browsers
+        .borrow()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|panel| panel.widget == remote)
+}
 
 fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
+    if let Some((_, profile_id, protocol, panel)) = state.transfer_tabs.borrow().iter()
+        .find(|(w, _, _, _)|w.upgrade().as_ref() == Some(widget)) {
+        return Some(Layout::FileBrowser {profile_id:profile_id.clone(), protocol:*protocol,
+            view:panel.upgrade().map(|p|p.workspace_view()), directory:panel.upgrade().and_then(|p|p.current_directory())});
+    }
     if let Some(tracker) = state
         .recoveries
         .borrow()
@@ -21,6 +89,7 @@ fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
             id: tracker.id.clone(),
             source: tracker.source(),
             had_draft: tracker.modified(),
+            view: tracker.workspace_view(),
         });
     }
     if let Some((_, layout)) = state
@@ -52,15 +121,15 @@ fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
             second: Box::new(capture_layout(state, &paned.end_child()?)?),
         });
     }
-    if let Some((_, target)) = state
+    if let Some((_, layout)) = state
         .workspace_placeholders
         .borrow()
         .iter()
         .find(|(weak, _)| weak.upgrade().as_ref() == Some(widget))
     {
-        return Some(Layout::Terminal {
-            target: target.clone(),
-        });
+        let mut layout=layout.clone();
+        if let Layout::Terminal {view,..}=&mut layout {view.focused=panel_focused(state,widget,view.focused);}
+        return Some(layout);
     }
     if let Some(term) = widget.downcast_ref::<vte4::Terminal>() {
         let session = state
@@ -70,14 +139,11 @@ fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
             .filter_map(Weak::upgrade)
             .find(|s| s.terminal.upgrade().as_ref() == Some(term))?;
         let target = if let Some(connection) = &session.connection {
+            let panel=panel_for_terminal(state,widget);
             Target::Connection {
                 profile_id: connection.profile.id.clone(),
-                directory: state
-                    .remote_browsers
-                    .borrow()
-                    .iter()
-                    .filter_map(Weak::upgrade)
-                    .find_map(|panel| panel.workspace_directory(connection)),
+                directory: panel.as_ref().and_then(|p|p.current_directory()),
+                browser: panel.as_ref().map(|p|p.workspace_view()),
             }
         } else if std::path::Path::new(&session.spec.program)
             .file_name()
@@ -91,6 +157,7 @@ fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
                 .find(|p| connection::command(p).ok().as_ref() == Some(&session.spec))
                 .map(|p| Target::Connection {
                     profile_id: p.id.clone(),
+                    browser: None,
                     directory: None,
                 })
                 .unwrap_or(Target::Unavailable {
@@ -109,7 +176,7 @@ fn capture_layout(state: &State, widget: &gtk::Widget) -> Option<Layout> {
                     .filter(|p| p.is_absolute()),
             }
         };
-        return Some(Layout::Terminal { target });
+        return Some(Layout::Terminal { target, view:TerminalView {zoom:term.font_scale(),focused:panel_focused(state,widget,false)} });
     }
     let mut child = widget.first_child();
     while let Some(current) = child {
@@ -128,6 +195,7 @@ pub(super) fn capture(state: &State, id: String, name: String, notes: String) ->
             Tab {
                 title: page.title().to_string(),
                 layout: capture_layout(state, &page.child()).unwrap_or(Layout::Terminal {
+                    view: Default::default(),
                     target: Target::Unavailable {
                         description: "Este tipo de pestaña todavía no admite recuperación".into(),
                     },
@@ -145,8 +213,9 @@ pub(super) fn capture(state: &State, id: String, name: String, notes: String) ->
             .selected_page()
             .map(|p| state.notebook.page_position(&p).max(0) as usize)
             .unwrap_or(0),
-        directory: state.local_files.borrow().as_ref().map(|p| p.directory()),
+        directory: state.local_files.borrow().as_ref().map(|p| p.workspace_directory()),
         sidebar_visible: state.sidebar_area.is_visible(),
+        browser: state.local_files.borrow().as_ref().map(|p|p.workspace_view()),
         chats: state
             .ai_workspace
             .borrow()
@@ -164,10 +233,59 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
     root.set_hexpand(true);
     root.set_vexpand(true);
     match layout {
+        Layout::Desktop {profile_id,protocol} => {
+            state.workspace_documents.borrow_mut().retain(|(w,_)|w.upgrade().is_some());
+            state.workspace_documents.borrow_mut().push((root.upcast_ref::<gtk::Widget>().downgrade(),layout.clone()));
+            let available=state.config.borrow().profiles.iter().any(|p|p.id==*profile_id && p.protocol==*protocol);
+            let message=gtk::Label::new(Some(if available {"Escritorio remoto desconectado. Abre la pestaña para introducir las credenciales."} else {"El perfil no existe o ha cambiado de protocolo"}));
+            message.set_wrap(true);
+            root.append(&message);
+            let start=gtk::Button::with_label("Abrir escritorio");
+            start.set_sensitive(available);
+            root.append(&start);
+            let s=Rc::downgrade(state);
+            let r=root.downgrade();
+            let profile_id=profile_id.clone();
+            let protocol=*protocol;
+            start.connect_clicked(move |_| {
+                let (Some(state),Some(root))=(s.upgrade(),r.upgrade()) else {return;};
+                let profile=state.config.borrow().profiles.iter().find(|p|p.id==profile_id && p.protocol==protocol).cloned();
+                let Some(profile)=profile else {message.set_text("El perfil no existe o ha cambiado de protocolo");return;};
+                if let Some(window)=state.window.upgrade() {
+                    connect_profile_at(&state,&window,&profile,None,None,Some(root));
+                }
+            });
+        }
+        Layout::FileBrowser { profile_id, protocol, directory, view } => {
+            state.workspace_documents.borrow_mut().retain(|(w,_)|w.upgrade().is_some());
+            state.workspace_documents.borrow_mut().push((root.upcast_ref::<gtk::Widget>().downgrade(),layout.clone()));
+            let available = state.config.borrow().profiles.iter().any(|p|p.id == *profile_id && p.protocol == *protocol);
+            let message = gtk::Label::new(Some(if available {"Explorador remoto desconectado"} else {"El perfil no existe o ha cambiado de protocolo"}));
+            message.set_wrap(true);
+            root.append(&message);
+            let start = gtk::Button::with_label("Conectar");
+            start.set_sensitive(available);
+            root.append(&start);
+            let s = Rc::downgrade(state);
+            let r = root.downgrade();
+            let profile_id = profile_id.clone();
+            let protocol = *protocol;
+            let directory = directory.clone();
+            let view = view.clone();
+            start.connect_clicked(move |_| {
+                let (Some(state),Some(root)) = (s.upgrade(),r.upgrade()) else {return;};
+                let profile = state.config.borrow().profiles.iter().find(|p|p.id == profile_id && p.protocol == protocol).cloned();
+                let Some(profile) = profile else {message.set_text("El perfil no existe o ha cambiado de protocolo");return;};
+                if let Some(window) = state.window.upgrade() {
+                    connect_profile_at(&state,&window,&profile,directory.clone(),view.clone(),Some(root));
+
+                }
+            });
+        }
         Layout::Document {
             id,
             source,
-            had_draft,
+            had_draft, ..
         } => {
             state
                 .workspace_documents
@@ -212,7 +330,7 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
             });
             root.append(&paned);
         }
-        Layout::Terminal { target } => {
+        Layout::Terminal { target, view } => {
             let label = match target {
                 Target::Local { directory } => format!(
                     "Terminal local · {}",
@@ -249,6 +367,16 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
                     .any(|p| &p.id == profile_id),
                 _ => true,
             });
+            if view.focused {start.add_css_class("workspace-focused-panel");}
+            let focus=gtk::EventControllerFocus::new();
+            let s=Rc::downgrade(state);
+            let r=root.downgrade();
+            focus.connect_enter(move |_| {
+                if let (Some(state),Some(root))=(s.upgrade(),r.upgrade()) {
+                    *state.workspace_focus.borrow_mut()=root.upcast_ref::<gtk::Widget>().downgrade();
+                }
+            });
+            start.add_controller(focus);
             root.append(&start);
             state
                 .workspace_placeholders
@@ -257,11 +385,12 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
             state
                 .workspace_placeholders
                 .borrow_mut()
-                .push((root.upcast_ref::<gtk::Widget>().downgrade(), target.clone()));
+                .push((root.upcast_ref::<gtk::Widget>().downgrade(), layout.clone()));
             let s = Rc::downgrade(state);
             let r = root.downgrade();
             let m = message.downgrade();
             let target = target.clone();
+            let view = *view;
             let connections = connections.clone();
             start.connect_clicked(move |_| {
                 let (Some(state), Some(root), Some(message)) = (s.upgrade(), r.upgrade(), m.upgrade()) else { return; };
@@ -284,7 +413,7 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
                         let existing = connections.borrow().get(profile_id).cloned().filter(|c| !c.closed.load(std::sync::atomic::Ordering::Relaxed));
                         let connection = existing.map(Ok).unwrap_or_else(||nexuterm::ssh::SshConnection::new(profile.clone()));
                         connection.and_then(|connection| {
-                            let spec = connection.terminal_command()?;
+                            let spec = ssh_terminal_command(&connection)?;
                             connections.borrow_mut().insert(profile_id.clone(), connection.clone());
                             Ok((profile.name, spec, Some(connection), None))
                         })
@@ -298,6 +427,7 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
                         if let (Some(connection), Some(window)) = (&connection, state.window.upgrade()) {
                             let directory = match &target { Target::Connection { directory, .. } => directory.clone().unwrap_or_else(||PathBuf::from(".")), _ => PathBuf::from(".") };
                             let panel = crate::remote_panel::Panel::new_in_directory(&state, &window, connection.clone(), directory);
+                            if let Target::Connection {browser:Some(view),..}=&target {panel.restore_workspace_view(view.clone());}
                             state.sidebar_stack.add_child(&panel.widget);
                             let page = (0..state.notebook.n_pages()).map(|i|state.notebook.nth_page(i).child()).find(|page|root.upcast_ref::<gtk::Widget>() == page || root.is_ancestor(page));
                             if let Some(page) = page { state.remote_panels.borrow_mut().push((page.downgrade(), panel.widget.downgrade())); }
@@ -305,6 +435,7 @@ fn restore_layout(state: &Rc<State>, layout: &Layout, connections: &Connections)
                             update_sidebar(&state);
                         }
                         terminal_in_directory(&state, &title, spec, Some(&root), connection, directory);
+                        if let Some(term)=find_terminal(root.upcast_ref()) {term.set_font_scale(view.zoom);}
                     }
                     Err(error) => message.set_text(&error),
                 }
@@ -360,6 +491,13 @@ fn replace_document(
     let (Some(old), Some(new)) = (page_for(state, placeholder), page_for(state, editor)) else {
         return;
     };
+    let view=state.workspace_documents.borrow().iter().find_map(|(root,layout)| {
+        if root.upgrade().as_ref()!=Some(placeholder.upcast_ref()) {return None;}
+        match layout {Layout::Document {view,..}=>*view,_=>None}
+    });
+    if let Some(view)=view {
+        if let Some(tracker)=state.recoveries.borrow().iter().filter_map(Weak::upgrade).find(|t|t.root.upgrade().as_ref()==Some(editor)) {tracker.restore_workspace_view(view);}
+    }
     let position = state.notebook.page_position(&old);
     state.notebook.reorder_page(&new, position);
     state.notebook.close_page(&old);
@@ -599,11 +737,24 @@ pub(super) fn restore(state: &Rc<State>, workspace: &Workspace) -> bool {
             .notebook
             .set_selected_page(&state.notebook.nth_page(offset + workspace.selected as i32));
     }
+    if let Some(page)=state.notebook.selected_page() {
+        let root=page.child();
+        root.add_tick_callback(|root,_| {
+            fn marked(w:&gtk::Widget)->Option<gtk::Widget> {
+                if w.has_css_class("workspace-focused-panel") {return Some(w.clone());}
+                let mut child=w.first_child();
+                while let Some(c)=child {if let Some(found)=marked(&c){return Some(found);}child=c.next_sibling();}
+                None
+            }
+            if let Some(w)=marked(root) {w.grab_focus();}
+            glib::ControlFlow::Break
+        });
+    }
     if let Some(directory) = &workspace.directory
         && directory.is_dir()
         && let Some(panel) = state.local_files.borrow().as_ref()
     {
-        panel.navigate(directory.clone());
+        panel.restore_workspace(directory.clone(),workspace.browser.clone());
     }
     state.sidebar_area.set_visible(workspace.sidebar_visible);
     state.status.set_text(
@@ -751,6 +902,7 @@ pub(super) fn show(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             glib::spawn_future_local(async move {
                 let result = async {
                     for tracker in trackers { tracker.flush().await.map_err(|e|format!("No se pudo conservar un borrador: {e}"))?; }
+                    if capture_tabs {crate::chat_history_ui::flush(&state).await;}
                     let workspace = if capture_tabs { capture(&state, id, name, notes) }
                         else { let mut workspace = next.workspaces[index].clone(); workspace.name = name; workspace.notes = notes; workspace };
                     let index = if index < next.workspaces.len() { next.workspaces[index] = workspace; index }
@@ -900,7 +1052,7 @@ pub(super) fn show(state: &Rc<State>, window: &gtk::ApplicationWindow) {
                         match layout {
                             Layout::Split { first, .. } => first_directory(first),
                             Layout::Terminal {
-                                target: Target::Local { directory },
+                                target: Target::Local { directory }, ..
                             } => directory,
                             _ => panic!("Expected local terminal"),
                         }
@@ -1110,7 +1262,7 @@ pub(super) fn smoke_documents(state: &Rc<State>, window: &gtk::ApplicationWindow
                 let Layout::Document {
                     id,
                     source,
-                    had_draft,
+                    had_draft, ..
                 } = &tab.layout
                 else {
                     panic!("Editor must be recorded as a document");
@@ -1475,7 +1627,8 @@ pub(super) fn smoke_chats(state: &Rc<State>, window: &gtk::ApplicationWindow) {
         glib::timeout_future(std::time::Duration::from_millis(200)).await;
         let mode = std::env::var("NEXUTERM_SMOKE_WORKSPACE_CHATS").unwrap();
         let stored = Store::load(&Store::path().unwrap()).unwrap();
-        let expected = stored.workspaces[0].chats.clone();
+        let mut expected = stored.workspaces[0].chats.clone();
+        for chat in &mut expected.tabs {chat.archive=Some(chat.id.clone());}
         show(&state, &window);
         let manager = state.workspace_manager.borrow().upgrade().unwrap();
         let selector = smoke_widget(manager.upcast_ref(), gtk::DropDown::static_type())
@@ -1567,6 +1720,54 @@ pub(super) fn smoke_chats(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             let saved = Store::load(&Store::path().unwrap()).unwrap();
             assert_eq!(saved.workspaces[0].chats, chats_before);
             eprintln!("NEXUTERM_SMOKE_CHATS_SAVE_OK");
+        } else if matches!(mode.as_str(),"api-continue"|"acp-continue"|"acp-retry"|"acp-disconnect"|"codex-state"|"history-many") {
+            notebook.set_current_page(Some(0));let page=notebook.nth_page(Some(0)).unwrap();
+            let initial=(state.ai_workspace.borrow().as_ref().unwrap().capture)();
+            assert_eq!(initial.tabs[0].attachments,expected.tabs[0].attachments);assert_eq!(initial.tabs[0].reasoning,expected.tabs[0].reasoning);
+            named(&page,"workspace-resume-chat").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
+            let send=named(&page,"codex-send").unwrap().downcast::<gtk::Button>().unwrap();
+            if matches!(mode.as_str(),"acp-retry"|"acp-disconnect") {
+                let retry=named(&page,"workspace-resume-chat").unwrap().downcast::<gtk::Button>().unwrap();
+                for _ in 0..100{glib::timeout_future(std::time::Duration::from_millis(30)).await;if retry.is_sensitive() && retry.label().as_deref()==Some("Reintentar reanudación"){break;}}
+                assert!(!send.is_sensitive());assert!(retry.is_sensitive());
+                let before=(state.ai_workspace.borrow().as_ref().unwrap().capture)();assert_eq!(before.tabs[0].messages,expected.tabs[0].messages);
+                std::fs::remove_file(std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(if mode=="acp-disconnect"{"load-disconnect"}else{"load-failure"})).unwrap();retry.emit_clicked();
+            }
+            for _ in 0..100 {glib::timeout_future(std::time::Duration::from_millis(30)).await;if send.is_sensitive(){break;}}
+            assert!(send.is_sensitive(),"conversation did not resume");
+            let resumed=(state.ai_workspace.borrow().as_ref().unwrap().capture)();
+            assert_eq!(resumed.tabs[0].attachments,expected.tabs[0].attachments);assert_eq!(resumed.tabs[0].reasoning,expected.tabs[0].reasoning);
+            let input=named(&page,"codex-composer").unwrap().downcast::<gtk::TextView>().unwrap();
+            let turns=if mode=="history-many"{75}else{1};
+            for _ in 0..turns {
+                input.buffer().set_text("segundo mensaje de prueba");send.emit_clicked();
+                for _ in 0..100 {glib::timeout_future(std::time::Duration::from_millis(15)).await;if !state.ai_process.borrow().as_ref().unwrap().busy(){break;}}
+                glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                assert!(send.is_sensitive());
+            }
+            let snap=(state.ai_workspace.borrow().as_ref().unwrap().capture)();
+            assert!(snap.tabs[0].attachments.is_empty());assert_eq!(snap.tabs[0].reasoning,expected.tabs[0].reasoning);
+            assert!(snap.tabs[0].messages.iter().any(|m|m.response && m.text.contains(if mode=="api-continue"{"respuesta-2"}else if matches!(mode.as_str(),"acp-continue"|"acp-retry"|"acp-disconnect"){"Respuesta ACP gráfica."}else{"Respuesta gráfica de Codex."})));
+            crate::chat_history_ui::flush(&state).await;
+            let id=snap.tabs[0].archive.clone().unwrap();let directory=nexuterm::chat_history::directory().unwrap();
+            let history=nexuterm::runtime::runtime().spawn_blocking(move ||nexuterm::chat_history::page(&directory,&id,0)).await.unwrap().unwrap();
+            assert_eq!(history.total,expected.tabs[0].messages.len()+turns*2);
+            if mode=="history-many" {assert_eq!(snap.tabs[0].messages.len(),128);}
+            let window=state.window().unwrap();named(window.upcast_ref(),"ai-local-history").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
+            glib::timeout_future(std::time::Duration::from_millis(200)).await;
+            let manager=gtk::Window::list_toplevels().into_iter().find(|w|w.widget_name()=="chat-local-history").unwrap();
+            let status=named(&manager,"chat-history-status").unwrap().downcast::<gtk::Label>().unwrap();
+            for _ in 0..100 {if status.text().contains("de "){break;}glib::timeout_future(std::time::Duration::from_millis(20)).await;}
+            assert!(status.text().contains(&format!("de {}",history.total)),"{}",status.text());
+            if mode=="history-many" {named(&manager,"chat-history-next").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();for _ in 0..100{glib::timeout_future(std::time::Duration::from_millis(20)).await;if status.text().starts_with("Mensajes 26"){break;}}assert!(status.text().starts_with("Mensajes 26"));}
+            if let Some(path)=std::env::var_os("NEXUTERM_CHAT_HISTORY_SCREENSHOT") {
+                glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                let window=manager.clone().downcast::<gtk::Window>().unwrap();
+                let paintable=gtk::WidgetPaintable::new(Some(&window));let snapshot=gtk::Snapshot::new();
+                paintable.snapshot(&snapshot,window.width() as f64,window.height() as f64);
+                let node=snapshot.to_node().unwrap();window.renderer().unwrap().render_texture(&node,None).save_to_png(path).unwrap();
+            }
+            eprintln!("NEXUTERM_SMOKE_CHAT_CONTINUATION_OK");
         } else if mode == "resume" || mode == "resume-failure" {
             notebook.set_current_page(Some(0));
             let page = notebook.nth_page(Some(0)).unwrap();
@@ -1636,5 +1837,809 @@ pub(super) fn smoke_chats(state: &Rc<State>, window: &gtk::ApplicationWindow) {
             );
             eprintln!("NEXUTERM_SMOKE_CHATS_RESTORE_OK");
         }
+    });
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_transfer_restore(state: &Rc<State>) {
+    let mut workspace = capture(
+        state,
+        "transfer-fixture".into(),
+        "Transferencias".into(),
+        String::new(),
+    );
+    workspace.tabs.clear();
+    workspace.chats = Default::default();
+    for protocol in [Protocol::Ftp, Protocol::Sftp] {
+        let id = format!("restore-{protocol:?}");
+        state.config.borrow_mut().profiles.push(Profile {
+            id: id.clone(),
+            name: id.clone(),
+            protocol,
+            host: "127.0.0.1".into(),
+            port: 1,
+            username: "fixture".into(),
+            ..Default::default()
+        });
+        workspace.tabs.push(Tab {
+            title: id.clone(),
+            layout: Layout::FileBrowser {
+                view: Some(Default::default()),
+                profile_id: id,
+                protocol,
+                directory: Some(PathBuf::from("/saved folder")),
+            },
+        });
+    }
+    workspace.tabs.push(Tab {
+        title: "Eliminado".into(),
+        layout: Layout::FileBrowser {
+            view: None,
+            profile_id: "deleted".into(),
+            protocol: Protocol::Ftp,
+            directory: None,
+        },
+    });
+    let before = state.notebook.n_pages();
+    let masters = state.sftp_masters.borrow().len();
+    let browsers = state.remote_browsers.borrow().len();
+    assert!(restore(state, &workspace));
+    assert_eq!(state.notebook.n_pages(), before + 3);
+    assert_eq!(state.sftp_masters.borrow().len(), masters);
+    assert_eq!(state.remote_browsers.borrow().len(), browsers);
+    for (offset, tab) in workspace.tabs.iter().enumerate() {
+        let page = state.notebook.nth_page(before + offset as i32);
+        assert_eq!(
+            capture_layout(state, &page.child()),
+            Some(tab.layout.clone())
+        );
+        let button = find_button(&page.child(), "Conectar").unwrap();
+        assert_eq!(button.is_sensitive(), offset < 2);
+        if offset < 2 {
+            let Layout::FileBrowser { profile_id, .. } = &tab.layout else {
+                unreachable!()
+            };
+            state
+                .config
+                .borrow_mut()
+                .profiles
+                .iter_mut()
+                .find(|p| p.id == *profile_id)
+                .unwrap()
+                .protocol = Protocol::Telnet;
+            button.emit_clicked();
+            assert_eq!(state.notebook.n_pages(), before + 3);
+            assert_eq!(state.remote_browsers.borrow().len(), browsers);
+        }
+    }
+    // Exercise the tab handoff with bounded in-memory transfer channels, no server.
+    for offset in 0..2 {
+        let tab = &workspace.tabs[offset];
+        let Layout::FileBrowser {
+            profile_id,
+            protocol,
+            directory, ..
+        } = &tab.layout
+        else {
+            unreachable!()
+        };
+        let profile = Profile {
+            id: profile_id.clone(),
+            protocol: *protocol,
+            ..Default::default()
+        };
+        let old = state
+            .notebook
+            .nth_page(before + offset as i32)
+            .child()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let (client, _worker) = nexuterm::transfer::Client::channels();
+        let window = state.window.upgrade().unwrap();
+        let panel = crate::remote_panel::Panel::with_client_directory(
+            state,
+            &window,
+            client,
+            directory.clone().unwrap(),
+        );
+        let widget = crate::file_browser::workspace(state, &panel);
+        let close_panel = panel.clone();
+        append_tab(&state.notebook, &widget, &tab.title, move || {
+            close_panel.stop()
+        });
+        finish_transfer_tab(state, &widget, &profile, &panel, Some(&old));
+        assert_eq!(state.notebook.n_pages(), before + 3);
+        assert_eq!(
+            state.notebook.nth_page(before + offset as i32).child(),
+            *widget.upcast_ref::<gtk::Widget>()
+        );
+        assert_eq!(
+            capture_layout(state, widget.upcast_ref()),
+            Some(tab.layout.clone())
+        );
+    }
+    assert_eq!(
+        state
+            .local_browsers
+            .borrow()
+            .iter()
+            .filter(|w| w.upgrade().is_some())
+            .count(),
+        1
+    );
+    eprintln!("NEXUTERM_SMOKE_TRANSFER_RESTORE_OK");
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_desktop_restore(state: &Rc<State>) {
+    let mut workspace = capture(
+        state,
+        "desktop-fixture".into(),
+        "Escritorios".into(),
+        String::new(),
+    );
+    workspace.tabs.clear();
+    workspace.chats = Default::default();
+    for protocol in [Protocol::Rdp, Protocol::Vnc] {
+        let id = format!("restore-{protocol:?}");
+        state.config.borrow_mut().profiles.push(Profile {
+            id: id.clone(),
+            name: id.clone(),
+            protocol,
+            host: "127.0.0.1".into(),
+            port: 1,
+            username: "fixture".into(),
+            ..Default::default()
+        });
+        workspace.tabs.push(Tab {
+            title: id.clone(),
+            layout: Layout::Desktop {
+                profile_id: id,
+                protocol,
+            },
+        });
+    }
+    workspace.tabs.push(Tab {
+        title: "Eliminado".into(),
+        layout: Layout::Desktop {
+            profile_id: "deleted".into(),
+            protocol: Protocol::Vnc,
+        },
+    });
+    let before = state.notebook.n_pages();
+    let desktops = state.desktops.borrow().len();
+    assert!(restore(state, &workspace));
+    assert_eq!(state.notebook.n_pages(), before + 3);
+    assert_eq!(state.desktops.borrow().len(), desktops);
+    for (offset, tab) in workspace.tabs.iter().enumerate() {
+        let page = state.notebook.nth_page(before + offset as i32);
+        assert_eq!(
+            capture_layout(state, &page.child()),
+            Some(tab.layout.clone())
+        );
+        assert_eq!(
+            find_button(&page.child(), "Abrir escritorio")
+                .unwrap()
+                .is_sensitive(),
+            offset < 2
+        );
+    }
+    for offset in 0..2 {
+        let tab = &workspace.tabs[offset];
+        let Layout::Desktop {
+            profile_id,
+            protocol,
+        } = &tab.layout
+        else {
+            unreachable!()
+        };
+        let page = state.notebook.nth_page(before + offset as i32);
+        let root = page.child();
+        let button = find_button(&root, "Abrir escritorio").unwrap();
+        state
+            .config
+            .borrow_mut()
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == *profile_id)
+            .unwrap()
+            .protocol = Protocol::Telnet;
+        button.emit_clicked();
+        assert_eq!(
+            state.notebook.nth_page(before + offset as i32).child(),
+            root
+        );
+        state
+            .config
+            .borrow_mut()
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == *profile_id)
+            .unwrap()
+            .protocol = *protocol;
+        button.emit_clicked();
+        assert_eq!(state.notebook.n_pages(), before + 3);
+        let new_page = state.notebook.nth_page(before + offset as i32);
+        assert_ne!(new_page.child(), root);
+        assert_eq!(state.notebook.selected_page(), Some(new_page.clone()));
+        assert_eq!(
+            capture_layout(state, &new_page.child()),
+            Some(tab.layout.clone())
+        );
+        assert!(find_button(&new_page.child(), "Conectar").is_some());
+        assert_eq!(
+            state.desktops.borrow().len(),
+            desktops,
+            "Opening credentials must not connect"
+        );
+        fn password(widget: &gtk::Widget) -> Option<gtk::PasswordEntry> {
+            if let Some(p) = widget.downcast_ref::<gtk::PasswordEntry>() {
+                return Some(p.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                if let Some(p) = password(&current) {
+                    return Some(p);
+                }
+                child = current.next_sibling();
+            }
+            None
+        }
+        let secret = password(&new_page.child()).unwrap();
+        assert!(secret.text().is_empty());
+        secret.set_text("fixture-secret-never-persist");
+        let snapshot = capture(state, "fixture".into(), "fixture".into(), String::new());
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("fixture-secret")
+        );
+        secret.set_text("");
+    }
+    for _ in 0..3 {
+        let page = state.notebook.nth_page(before);
+        state.notebook.close_page(&page);
+    }
+    assert_eq!(state.notebook.n_pages(), before);
+    eprintln!("NEXUTERM_SMOKE_DESKTOP_RESTORE_OK");
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_desktop_workspace(state: &Rc<State>, profile: Profile) {
+    let rdp=profile.protocol==Protocol::Rdp;
+    let mut workspace = capture(state, "vnc-fixture".into(), "VNC".into(), String::new());
+    workspace.tabs = vec![Tab {
+        title: profile.name.clone(),
+        layout: Layout::Desktop {
+            profile_id: profile.id.clone(),
+            protocol: profile.protocol,
+        },
+    }];
+    workspace.selected = 0;
+    workspace.chats = Default::default();
+    state.config.borrow_mut().profiles.push(profile);
+    let path = Store::path().unwrap();
+    Store {
+        version: 1,
+        workspaces: vec![workspace],
+    }
+    .save(&path)
+    .unwrap();
+    let saved = Store::load(&path).unwrap();
+    let before = state.notebook.n_pages();
+    let desktops = state.desktops.borrow().len();
+    assert!(restore(state, &saved.workspaces[0]));
+    assert_eq!(state.desktops.borrow().len(), desktops);
+    let page = state.notebook.nth_page(before);
+    find_button(&page.child(), "Abrir escritorio")
+        .unwrap()
+        .emit_clicked();
+    assert_eq!(state.notebook.n_pages(), before + 1);
+    assert_eq!(
+        capture_layout(state, &state.notebook.nth_page(before).child()),
+        Some(saved.workspaces[0].tabs[0].layout.clone())
+    );
+    if rdp {eprintln!("NEXUTERM_SMOKE_RDP_WORKSPACE_OK");} else {eprintln!("NEXUTERM_SMOKE_VNC_WORKSPACE_OK");}
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_visual_restore(state: &Rc<State>) {
+    let mut workspace = capture(state, "visual".into(), "Visual".into(), String::new());
+    workspace.chats = Default::default();
+    workspace.tabs = vec![Tab {
+        title: "Divisiones".into(),
+        layout: Layout::Split {
+            vertical: false,
+            ratio: 0.4,
+            first: Box::new(Layout::Terminal {
+                target: Target::Local { directory: None },
+                view: TerminalView {
+                    zoom: 1.4,
+                    focused: false,
+                },
+            }),
+            second: Box::new(Layout::Terminal {
+                target: Target::Local { directory: None },
+                view: TerminalView {
+                    zoom: 0.8,
+                    focused: true,
+                },
+            }),
+        },
+    }];
+    workspace.selected = 0;
+    let before = state
+        .sessions
+        .borrow()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .count();
+    let offset = state.notebook.n_pages();
+    assert!(restore(state, &workspace));
+    assert_eq!(
+        state
+            .sessions
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .count(),
+        before
+    );
+    let root = state.notebook.nth_page(offset).child();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        glib::timeout_future(std::time::Duration::from_millis(350)).await;
+        let Layout::Split { first, second, .. } = capture_layout(&state, &root).unwrap() else {
+            panic!()
+        };
+        assert!(matches!(
+            *first,
+            Layout::Terminal {
+                view: TerminalView {
+                    zoom: 1.4,
+                    focused: false
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            *second,
+            Layout::Terminal {
+                view: TerminalView {
+                    zoom: 0.8,
+                    focused: true
+                },
+                ..
+            }
+        ));
+        fn marked(w: &gtk::Widget) -> Option<gtk::Button> {
+            if w.has_css_class("workspace-focused-panel") {
+                return w.clone().downcast().ok();
+            }
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                if let Some(found) = marked(&c) {
+                    return Some(found);
+                }
+                child = c.next_sibling();
+            }
+            None
+        }
+        let start = marked(&root).unwrap();
+        assert!(
+            start.has_focus(),
+            "Selected restored pane must receive focus"
+        );
+        start.emit_clicked();
+        let term = find_terminal(&root).unwrap();
+        assert!((term.font_scale() - 0.8).abs() < 0.001);
+        let process = state.ai_process.borrow().as_ref().unwrap().clone();
+        let chat = super::codex_chat::build(&state, &process, &uuid::Uuid::new_v4().to_string());
+        let mut saved = (chat.snapshot)();
+        saved.title = "Lectura".into();
+        saved.scroll = Some(0.35);
+        saved.messages = (0..40)
+            .map(|i| nexuterm::workspaces::ChatMessage {
+                title: format!("Mensaje {i}"),
+                text: "Línea de conversación recuperada para comprobar lectura.\n".repeat(30),
+                tool: false,
+                response: true,
+            })
+            .collect();
+        (chat.restore)(&saved);
+        assert_eq!(
+            (chat.snapshot)().scroll,
+            Some(0.35),
+            "Unmapped chat must retain pending position"
+        );
+        append_tab(&state.notebook, &chat.widget, "Lectura", || {});
+        fn scroll(w: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
+            if w.widget_name() == "workspace-chat-scroll" {
+                return w.clone().downcast().ok();
+            }
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                if let Some(found) = scroll(&c) {
+                    return Some(found);
+                }
+                child = c.next_sibling();
+            }
+            None
+        }
+        let scrolled = scroll(chat.widget.upcast_ref()).unwrap();
+        let a = scrolled.vadjustment();
+        // Verify the allocated adjustment, not the snapshot's still-pending position.
+        // Mapping a large chat can span several frames, especially during a build.
+        let mut position=0.0;
+        for _ in 0..150 {
+            glib::timeout_future(std::time::Duration::from_millis(20)).await;
+            let range=(a.upper()-a.page_size()-a.lower()).max(0.0);
+            if range>0.0 {position=(a.value()-a.lower())/range;}
+            if (position-0.35).abs()<0.02 {break;}
+        }
+        assert!((position - 0.35).abs() < 0.02, "Restored allocated scroll {position}");
+        let previous = a.value();
+        let viewport = scrolled
+            .child()
+            .unwrap()
+            .downcast::<gtk::Viewport>()
+            .unwrap();
+        let messages = viewport.child().unwrap().downcast::<gtk::Box>().unwrap();
+        messages.append(&gtk::Label::new(Some(&"Nuevo resultado\n".repeat(80))));
+        glib::timeout_future(std::time::Duration::from_millis(250)).await;
+        assert!(
+            (a.value() - previous).abs() < 2.0,
+            "New output must not move the reader to the bottom: before={}, after={}, upper={}, page={}", previous, a.value(), a.upper(), a.page_size()
+        );
+        a.set_value(a.upper()-a.page_size());
+        messages.append(&gtk::Label::new(Some(&"Respuesta al final\n".repeat(80))));
+        glib::timeout_future(std::time::Duration::from_millis(250)).await;
+        assert!(a.upper()-a.page_size()-a.value()<2.0,"Following the bottom must continue for new output");
+        (chat.close)();
+        state
+            .notebook
+            .close_page(&state.notebook.page(&chat.widget));
+        state.notebook.close_page(&state.notebook.nth_page(offset));
+        eprintln!("NEXUTERM_SMOKE_VISUAL_RESTORE_OK");
+    });
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_editor_browser_views(state: &Rc<State>) {
+    use nexuterm::workspaces::{BrowserView, EditorView};
+    let directory = PathBuf::from(std::env::var_os("NEXUTERM_VIEWS_ROOT").unwrap());
+    let mut workspace = capture(state, "views".into(), "Vistas".into(), String::new());
+    workspace.chats = Default::default();
+    workspace.sidebar_visible = true;
+    workspace.directory = Some(directory.clone());
+    workspace.browser = Some(BrowserView {
+        hidden: true,
+        selected: Some(".selección á.txt".into()),
+        vertical: 0.4,
+        horizontal: 0.0,
+    });
+    let id = uuid::Uuid::new_v4().to_string();
+    workspace.tabs = vec![Tab {
+        title: "Texto".into(),
+        layout: Layout::Document {
+            id: id.clone(),
+            source: nexuterm::recovery::Source::Local {
+                path: directory.join("texto.txt"),
+                etag: None,
+            },
+            had_draft: false,
+            view: Some(EditorView {
+                cursor: 80,
+                anchor: 15,
+                vertical: 0.45,
+                horizontal: 0.0,
+            }),
+        },
+    }];
+    workspace.selected = 0;
+    let local = state.local_files.borrow().as_ref().unwrap().clone();
+    local.navigate(directory.join("initial"));
+    assert!(restore(state, &workspace));
+    assert_eq!(
+        capture(state, "pending".into(), "Pending".into(), String::new()).directory,
+        Some(directory.clone())
+    );
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let mut ready = false;
+        for _ in 0..100 {
+            glib::timeout_future(std::time::Duration::from_millis(30)).await;
+            if local.directory() == directory
+                && !local.is_loading()
+                && crate::files::existing_editor(&state, &id).is_some_and(|(r, _)| {
+                    crate::widget_state::editor(r.upcast_ref()).is_some_and(|v| v.cursor == 80)
+                })
+            {
+                ready = true;
+                break;
+            }
+        }
+        assert!(
+            ready,
+            "Editor and local browser must finish their asynchronous restore"
+        );
+        glib::timeout_future(std::time::Duration::from_millis(250)).await;
+        let (editor, _) = crate::files::existing_editor(&state, &id).unwrap();
+        let view = crate::widget_state::editor(editor.upcast_ref()).unwrap();
+        assert_eq!((view.cursor, view.anchor), (80, 15));
+        assert!(
+            (view.vertical - 0.45).abs() < 0.03,
+            "Editor position {}",
+            view.vertical
+        );
+        let view = local.workspace_view();
+        assert!(view.hidden);
+        assert_eq!(view.selected, Some(".selección á.txt".into()));
+        let actual_scroll =
+            crate::widget_state::browser(local.widget.upcast_ref(), false, None).vertical;
+        assert!(
+            (actual_scroll - 0.4).abs() < 0.04,
+            "Browser position {actual_scroll}"
+        );
+        // Reusing an existing editor must preserve its live selection and reading position.
+        let buffer = smoke_widget(editor.upcast_ref(), gtk::TextView::static_type())
+            .unwrap()
+            .downcast::<gtk::TextView>()
+            .unwrap()
+            .buffer();
+        buffer.select_range(&buffer.iter_at_offset(140), &buffer.iter_at_offset(130));
+        assert!(restore(&state, &workspace));
+        glib::timeout_future(std::time::Duration::from_millis(100)).await;
+        let (same, _) = crate::files::existing_editor(&state, &id).unwrap();
+        assert_eq!(same, editor);
+        assert_eq!(
+            (
+                crate::widget_state::editor(same.upcast_ref())
+                    .unwrap()
+                    .cursor,
+                crate::widget_state::editor(same.upcast_ref())
+                    .unwrap()
+                    .anchor
+            ),
+            (140, 130)
+        );
+        let missing = BrowserView {
+            hidden: false,
+            selected: Some("absent.txt".into()),
+            vertical: 0.0,
+            horizontal: 0.0,
+        };
+        local.restore_workspace(directory.clone(), Some(missing));
+        for _ in 0..100 {
+            glib::timeout_future(std::time::Duration::from_millis(20)).await;
+            if !local.is_loading() {
+                break;
+            }
+        }
+        glib::timeout_future(std::time::Duration::from_millis(150)).await;
+        assert_eq!(
+            local.workspace_view().selected,
+            None,
+            "Missing selection must not choose another file"
+        );
+        // Exercise a remote listing through bounded synthetic transfer channels.
+        let (client, worker) = nexuterm::transfer::Client::channels();
+        let window = state.window.upgrade().unwrap();
+        let panel = crate::remote_panel::Panel::with_client_directory(
+            &state,
+            &window,
+            client,
+            "/remote".into(),
+        );
+        let widget = crate::file_browser::workspace(&state, &panel);
+        let close_panel = panel.clone();
+        append_tab(&state.notebook, &widget, "Remote", move || {
+            close_panel.stop()
+        });
+        let remote_view = BrowserView {
+            hidden: true,
+            selected: Some(".remote.txt".into()),
+            vertical: 0.3,
+            horizontal: 0.0,
+        };
+        panel.restore_workspace_view(remote_view.clone());
+        assert_eq!(panel.workspace_view(), remote_view);
+        let entries = (0..100)
+            .map(|i| nexuterm::transfer::Entry {
+                name: if i == 2 {
+                    ".remote.txt".into()
+                } else {
+                    format!("entry-{i:03}").into()
+                },
+                directory: false,
+                regular: true,
+                size: Some(1),
+                permissions: None,
+            })
+            .collect();
+        worker
+            .events
+            .send(nexuterm::transfer::Event::Page {
+                directory: "/remote".into(),
+                entries,
+                more: false,
+            })
+            .await
+            .unwrap();
+        glib::timeout_future(std::time::Duration::from_millis(400)).await;
+        let actual = panel.workspace_view();
+        assert_eq!(actual.selected, remote_view.selected);
+        assert!(actual.hidden);
+        let actual_scroll = crate::widget_state::browser(widget.upcast_ref(), false, None).vertical;
+        assert!(
+            (actual_scroll - 0.3).abs() < 0.04,
+            "Remote scroll {actual_scroll}"
+        );
+        panel.stop();
+        state.notebook.close_page(&state.notebook.page(&widget));
+        eprintln!("NEXUTERM_SMOKE_EDITOR_BROWSER_VIEWS_OK");
+    });
+}
+
+#[cfg(debug_assertions)]
+pub(super) fn smoke_workspace_ssh(state: &Rc<State>) {
+    let profile = Profile {
+        id: "nexuterm-smoke-lab".into(),
+        name: "SSH recuperado".into(),
+        protocol: Protocol::Ssh,
+        host: "127.0.0.1".into(),
+        port: 22222,
+        username: "tester".into(),
+        identity: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".lab/id_ed25519")
+            .to_string_lossy()
+            .into(),
+        ..Default::default()
+    };
+    state.config.borrow_mut().profiles.push(profile.clone());
+    let target = Target::Connection {
+        profile_id: profile.id,
+        directory: Some("/home/tester/fixtures".into()),
+        browser: Some(nexuterm::workspaces::BrowserView {
+            selected: Some("unicode.txt".into()),
+            ..Default::default()
+        }),
+    };
+    let mut workspace = capture(state, "ssh".into(), "SSH".into(), String::new());
+    workspace.chats = Default::default();
+    workspace.selected = 0;
+    workspace.tabs = vec![Tab {
+        title: "SSH compartido".into(),
+        layout: Layout::Split {
+            vertical: false,
+            ratio: 0.5,
+            first: Box::new(Layout::Terminal {
+                target: target.clone(),
+                view: TerminalView::default(),
+            }),
+            second: Box::new(Layout::Terminal {
+                target: Target::Connection {
+                    profile_id: "nexuterm-smoke-lab".into(),
+                    directory: Some("/home/tester".into()),
+                    browser: Some(nexuterm::workspaces::BrowserView {
+                        selected: Some("fixtures".into()),
+                        ..Default::default()
+                    }),
+                },
+                view: TerminalView::default(),
+            }),
+        },
+    }];
+    let path = Store::path().unwrap();
+    Store {
+        version: 1,
+        workspaces: vec![workspace],
+    }
+    .save(&path)
+    .unwrap();
+    let saved = Store::load(&path).unwrap();
+    let before = state
+        .sessions
+        .borrow()
+        .iter()
+        .filter_map(Weak::upgrade)
+        .count();
+    let offset = state.notebook.n_pages();
+    assert!(restore(state, &saved.workspaces[0]));
+    assert_eq!(
+        state
+            .sessions
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .count(),
+        before
+    );
+    assert!(
+        state.workspace_panels.borrow().is_empty(),
+        "Restoring SSH must not create transport clients"
+    );
+    let root = state.notebook.nth_page(offset).child();
+    let first = find_button(&root, "Conectar").unwrap();
+    first.emit_clicked();
+    let second = find_button(&root, "Conectar").unwrap();
+    second.emit_clicked();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let sessions: Vec<_> = state
+            .sessions
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|s| s.connection.is_some())
+            .collect();
+        assert_eq!(sessions.len(), 2);
+        let connection = sessions[0].connection.as_ref().unwrap().clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &connection,
+            sessions[1].connection.as_ref().unwrap()
+        ));
+        let mut ready = false;
+        for _ in 0..120 {
+            glib::timeout_future(std::time::Duration::from_millis(30)).await;
+            if state
+                .remote_browsers
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|p| {
+                    p.smoke_has_entry("unicode.txt")
+                        && p.workspace_view().selected.as_deref()
+                            == Some(std::path::Path::new("unicode.txt"))
+                })
+            {
+                ready = true;
+                break;
+            }
+        }
+        assert!(
+            ready,
+            "Recovered SSH must authenticate and list the saved remote directory"
+        );
+        assert!(connection.socket().exists());
+        let panels: Vec<_> = state
+            .workspace_panels
+            .borrow()
+            .iter()
+            .map(|(_, p)| p.clone())
+            .collect();
+        assert_eq!(panels.len(), 2);
+        for _ in 0..100 {
+            if panels[1].smoke_has_entry("fixtures") {
+                break;
+            }
+            glib::timeout_future(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(panels[1].smoke_has_entry("fixtures"));
+        let Layout::Split { first, second, .. } = capture_layout(&state, &root).unwrap() else {
+            panic!()
+        };
+        assert!(
+            matches!(*first,Layout::Terminal {target:Target::Connection {directory:Some(ref d),..},..} if d==std::path::Path::new("/home/tester/fixtures"))
+        );
+        assert!(
+            matches!(*second,Layout::Terminal {target:Target::Connection {directory:Some(ref d),..},..} if d==std::path::Path::new("/home/tester"))
+        );
+        for session in &sessions {
+            session.terminal.upgrade().unwrap().grab_focus();
+            glib::timeout_future(std::time::Duration::from_millis(40)).await;
+            let expected =
+                panel_for_terminal(&state, session.terminal.upgrade().unwrap().upcast_ref())
+                    .unwrap();
+            assert_eq!(
+                state.sidebar_stack.visible_child(),
+                Some(expected.widget.clone().upcast::<gtk::Widget>())
+            );
+        }
+        state.notebook.close_page(&state.notebook.nth_page(offset));
+        assert!(connection.closed.load(std::sync::atomic::Ordering::Relaxed));
+        eprintln!(
+            "NEXUTERM_SMOKE_WORKSPACE_SSH_OK shared_connection=1 authenticated_listing=1 closed=1"
+        );
     });
 }

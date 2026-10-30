@@ -134,6 +134,7 @@ pub(crate) fn editor_document(
         .build();
     let buffer = text.buffer();
     let recovery = crate::recovery_ui::Tracker::attach(state, &root, &buffer, &status, source.clone(), recovered.as_ref().map(|d|d.id.clone()).or(document_id));
+    recovery.set_base(recovered.as_ref().and_then(|d|d.base_text.clone()));
     crate::recovery_ui::bind_copy(&save_copy, window, &buffer, &status, source.basename());
     crate::syntax::bind(&buffer, file.basename().unwrap_or_default());
     state
@@ -252,10 +253,11 @@ pub(crate) fn editor_document(
             b.set(true); button.set_sensitive(false);
             if let Some(save) = save.upgrade() { save.set_sensitive(false); }
             if let Some(status) = st.upgrade() { status.set_text("Comprobando la versión original en la conexión SSH…"); }
+            let base=recovery.base();
             let (origin, remote, file, tag, busy, status, save, recovery, badge, button) = (origin.clone(), remote.clone(), file.clone(), tag.clone(), b.clone(), st.clone(), save.clone(), recovery.clone(), badge.clone(), button.downgrade());
             glib::spawn_future_local(async move {
                 let result = async {
-                    let document = nexuterm::runtime::runtime().spawn(async move { nexuterm::remote_edit::RemoteDocument::recover(connection, &origin).await }).await.map_err(|e|e.to_string())??;
+                    let document = nexuterm::runtime::runtime().spawn(async move { nexuterm::remote_edit::RemoteDocument::recovery_preview(connection, &origin,base).await }).await.map_err(|e|e.to_string())??;
                     let local = gio::File::for_path(document.local_path());
                     let info = local.query_info_future("etag::value", gio::FileQueryInfoFlags::NONE, PRIORITY).await.map_err(|e|e.to_string())?;
                     let etag = info.etag().map(String::from).ok_or("La copia local no ofrece una versión segura de guardado")?;
@@ -266,14 +268,15 @@ pub(crate) fn editor_document(
                 match result {
                     Ok((document, local, etag)) => {
                         if let Some(badge) = badge.upgrade() { badge.set_text(&format!("SSH / {} · recuperado", document.host())); }
+                        let review=document.requires_review();
                         *remote.borrow_mut() = Some(document); *file.borrow_mut() = local; *tag.borrow_mut() = Some(etag);
-                        if let Some(save) = save.upgrade() { save.set_sensitive(true); }
-                        if let Some(status) = status.upgrade() { status.set_text("Original vinculado y comprobado. Guardado atómico con permisos POSIX; ACL y atributos extendidos no garantizados."); }
+                        if let Some(save) = save.upgrade() { save.set_sensitive(!review); }
+                        if let Some(status) = status.upgrade() { status.set_text(if review{"Conflicto: el original remoto cambió. Pulsa Comparar versiones y revisa el resultado antes de guardar."}else{"Original vinculado y comprobado. Guardado atómico con permisos POSIX; ACL y atributos extendidos no garantizados."}); }
                         if let Some(button) = button.upgrade() { button.set_label("Revalidar SSH"); button.set_sensitive(true); }
                     }
                     Err(error) => {
                         if let Some(status) = status.upgrade() { status.set_text(&format!("No se vinculó el borrador: {error}")); }
-                        if let Some(save) = save.upgrade() { save.set_sensitive(remote.borrow().is_some() && tag.borrow().is_some()); }
+                        if let Some(save) = save.upgrade() { save.set_sensitive(remote.borrow().as_ref().is_some_and(|d|!d.requires_review()) && tag.borrow().is_some()); }
                         if let Some(button) = button.upgrade() { button.set_sensitive(true); }
                     }
                 }
@@ -281,6 +284,7 @@ pub(crate) fn editor_document(
             });
         });
     }
+    crate::editor_compare::install(&toolbar,window,&buffer,&status,&save,loaded.clone(),busy.clone(),etag.clone(),current_file.clone(),current_remote.clone(),recovery.clone());
     let close_button = close.clone();
     let close_handler = Rc::new(RefCell::new(None));
     *close_handler.borrow_mut() = Some(state.notebook.connect_close_page(move |_, page| {
@@ -348,7 +352,7 @@ pub(crate) fn editor_document(
     let st = status.downgrade();
     let save_recovery = recovery.clone();
     save.connect_clicked(move |button| {
-        if b.get() || !l.get() || tag.borrow().is_none() {
+        if b.get() || !l.get() || tag.borrow().is_none() || remote_save.borrow().as_ref().is_some_and(|d|d.requires_review()) {
             return;
         }
         let Some(buffer) = buf.upgrade() else {
@@ -414,6 +418,7 @@ pub(crate) fn editor_document(
                     {
                         buffer.set_modified(false);
                     }
+                    recovery.set_base(Some(contents.clone()));
                     if let Some(remote) = &remote { recovery.set_source(remote.recovery_source()); }
                     let recovery_result = recovery.saved(tag.borrow().clone()).await;
                     if let Some(status) = status.upgrade() {
@@ -445,7 +450,7 @@ pub(crate) fn editor_document(
             }
             busy.set(false);
             if let Some(button) = button.upgrade() {
-                button.set_sensitive(tag.borrow().is_some());
+                button.set_sensitive(tag.borrow().is_some() && !remote.as_ref().is_some_and(|d|d.requires_review()));
             }
         });
     });
@@ -503,6 +508,7 @@ pub(crate) fn editor_document(
         ) {
             match result {
                 Ok((contents, tag)) => {
+                    if !is_recovered {recovery_loaded.set_base(Some(contents.clone()));}
                     buffer.set_text(&contents);
                     buffer.set_modified(is_recovered);
                     recovery_loaded.loaded(tag.clone());
@@ -531,7 +537,7 @@ pub(crate) fn editor_document(
                         crate::recovery_ui::smoke_loaded(&recovery_loaded, &buffer, &save, &window);
                     }
                     #[cfg(debug_assertions)]
-                    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() {
+                    if std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() && std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_none() {
                         assert_eq!(contents, "def value():\n    return 1\n");
                         buffer.set_text("def value():\n    return 42  # editado desde NexuTerm\n");
                         let keys = save_keys.upgrade().unwrap();

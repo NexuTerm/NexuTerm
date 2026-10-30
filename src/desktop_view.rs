@@ -24,7 +24,7 @@ fn position(x: f64, y: f64, width: i32, height: i32, frame: (u16, u16)) -> Optio
         .then_some((x.max(0.0) as u16, y.max(0.0) as u16))
 }
 
-pub fn show(state: &Rc<State>, profile: &Profile) {
+pub fn show(state: &Rc<State>, profile: &Profile) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("nexuterm-section");
     let rdp = profile.protocol == Protocol::Rdp;
@@ -325,8 +325,16 @@ pub fn show(state: &Rc<State>, profile: &Profile) {
     let test_scroll = scroll.clone();
     picture.add_controller(scroll);
 
+    state.workspace_documents.borrow_mut().retain(|(w,_)|w.upgrade().is_some());
+    state.workspace_documents.borrow_mut().push((root.upcast_ref::<gtk::Widget>().downgrade(),
+        nexuterm::workspaces::Layout::Desktop {profile_id:profile.id.clone(),protocol:profile.protocol}));
+    let s=Rc::downgrade(state);
+    let r=root.downgrade();
     let c = current.clone();
     append_tab(&state.notebook, &root, &profile.name, move || {
+        if let (Some(state),Some(root))=(s.upgrade(),r.upgrade()) {
+            state.workspace_documents.borrow_mut().retain(|(w,_)|w.upgrade().as_ref()!=Some(root.upcast_ref()));
+        }
         if let Some(d) = c.borrow_mut().take() {
             d.close();
         }
@@ -580,6 +588,7 @@ pub fn show(state: &Rc<State>, profile: &Profile) {
         }
         connect.emit_clicked();
     }
+    root
 }
 
 #[cfg(debug_assertions)]

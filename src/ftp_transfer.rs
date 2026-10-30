@@ -54,10 +54,15 @@ fn file(profile: &Profile, path: &Path) -> Result<gio::File, String> {
     };
     let mut uri =
         url::Url::parse(&format!("ftp://{host}:{}/", profile.port)).map_err(|e| e.to_string())?;
-    uri.set_username(&profile.username)
+    uri.set_username(&profile.username.replace('%',"%25"))
         .map_err(|_| "Usuario FTP inválido")?;
-    let path = path.to_str().ok_or("Ruta FTP no UTF-8")?;
-    uri.set_path(if path == "." { "/" } else { path });
+    {
+        let mut segments=uri.path_segments_mut().map_err(|_|"Ruta FTP inválida")?;segments.clear();
+        for component in path.components() {match component {
+            Component::Normal(name)=>{segments.push(name.to_str().ok_or("Ruta FTP no UTF-8")?);},
+            Component::ParentDir=>{segments.pop();},_=>{},
+        }}
+    }
     Ok(gio::File::for_uri(uri.as_str()))
 }
 // gio-rs does not expose this async GFile method in the pinned version.
@@ -162,42 +167,275 @@ async fn copy(
     channels: &WorkerChannels,
     lifetime: &gio::Cancellable,
 ) -> Result<(), String> {
-    let cancel = gio::Cancellable::new();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let progress = channels.progress.clone();
-    progress.send_replace(Progress::default());
-    source.copy_async(
-        &destination,
-        gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
-        PRIORITY,
-        Some(&cancel),
-        Some(Box::new(move |bytes, total| {
-            progress.send_replace(Progress {
-                bytes: bytes.max(0) as u64,
-                total: u64::try_from(total).ok(),
-            });
-        })),
-        move |result| {
-            let _ = sender.send(result);
-        },
-    );
-    let monitor = async {
-        loop {
-            if channels.cancel.load(Ordering::Relaxed)
-                || channels.stop.load(Ordering::Relaxed)
-                || lifetime.is_cancelled()
-            {
-                cancel.cancel();
+    let info = operation(
+        source.query_info_future(
+            "standard::type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            PRIORITY,
+        ),
+        channels,
+        lifetime,
+    )
+    .await?;
+    if info.file_type() != gio::FileType::Regular {
+        return Err("No se copian enlaces ni archivos especiales".into());
+    }
+    if !destination.is_native() {
+        return copy_file(source, destination, channels, lifetime).await;
+    }
+    let local = destination.path().ok_or("Destino local sin ruta nativa")?;
+    let parent = local
+        .parent()
+        .ok_or("Destino local inválido")?
+        .to_path_buf();
+    let temporary = nexuterm::runtime::runtime()
+        .spawn_blocking(move || {
+            tempfile::Builder::new()
+                .prefix(".nexuterm-")
+                .tempdir_in(parent)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let partial = temporary.path().join("content");
+    let result = async {
+        copy_file(source, gio::File::for_path(&partial), channels, lifetime).await?;
+        if channels.cancel.load(Ordering::Relaxed) || channels.stop.load(Ordering::Relaxed) {
+            return Err("Transferencia cancelada".into());
+        }
+        nexuterm::runtime::runtime()
+            .spawn(async move { tokio::fs::hard_link(partial, local).await })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| {
+                format!("No se publicó el archivo local (no se sobrescriben destinos): {e}")
+            })
+    }
+    .await;
+    let _ = nexuterm::runtime::runtime()
+        .spawn_blocking(move || drop(temporary))
+        .await;
+    result
+}
+async fn plan_download(
+    profile: &Profile,
+    remote: PathBuf,
+    local: PathBuf,
+    channels: &WorkerChannels,
+    lifetime: &gio::Cancellable,
+) -> Result<Vec<nexuterm::transfer::Planned>, String> {
+    let mut stack = vec![(remote, local, 0usize)];
+    let mut plan = Vec::new();
+    while let Some((remote, local, depth)) = stack.pop() {
+        if depth > 32 || plan.len() + stack.len() >= 512 {
+            return Err("El árbol supera 512 elementos o 32 niveles".into());
+        }
+        let source = file(profile, &remote)?;
+        let info = operation(
+            source.query_info_future(
+                "standard::type",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                PRIORITY,
+            ),
+            channels,
+            lifetime,
+        )
+        .await?;
+        let directory = info.file_type() == gio::FileType::Directory;
+        if !directory && info.file_type() != gio::FileType::Regular {
+            return Err(
+                "El árbol contiene enlaces o archivos especiales; no se ha transferido".into(),
+            );
+        }
+        if depth == 0 && !directory {
+            return Err("La carpeta remota cambió de tipo".into());
+        }
+        plan.push(nexuterm::transfer::Planned {
+            upload: false,
+            directory,
+            local: local.clone(),
+            remote: remote.clone(),
+        });
+        if directory {
+            let cursor = operation(
+                source.enumerate_children_future(
+                    "standard::name,standard::type",
+                    gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                    PRIORITY,
+                ),
+                channels,
+                lifetime,
+            )
+            .await?;
+            loop {
+                let entries =
+                    operation(cursor.next_files_future(100, PRIORITY), channels, lifetime).await?;
+                if entries.is_empty() {
+                    break;
+                }
+                for info in entries {
+                    let name = info.name();
+                    let target = nexuterm::ssh::join_remote(&remote, &name)?;
+                    if plan.len() + stack.len() >= 512 {
+                        return Err("El árbol supera 512 elementos".into());
+                    }
+                    stack.push((target, local.join(&name), depth + 1));
+                }
             }
-            glib::timeout_future(Duration::from_millis(50)).await;
+            operation(cursor.close_future(PRIORITY), channels, lifetime).await?;
+        }
+    }
+    Ok(plan)
+}
+
+async fn require_absent(
+    profile: &Profile,
+    path: &Path,
+    channels: &WorkerChannels,
+    lifetime: &gio::Cancellable,
+) -> Result<(), String> {
+    if path.file_name().is_some_and(|n|n.to_string_lossy().contains('\\')) {return Err("El nombre FTP no puede contener separadores inversos".into());}
+    let parent = path.parent().ok_or("Destino FTP inválido")?;
+    let name = path.file_name().ok_or("Destino FTP sin nombre")?;
+    let cursor = operation(
+        file(profile, parent)?.enumerate_children_future(
+            "standard::name",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            PRIORITY,
+        ),
+        channels,
+        lifetime,
+    )
+    .await?;
+    let result = async {
+        let mut count = 0;
+        loop {
+            let entries =
+                operation(cursor.next_files_future(100, PRIORITY), channels, lifetime).await?;
+            if entries.is_empty() {
+                return Ok(());
+            }
+            count += entries.len();
+            if count > 100000 {
+                return Err(
+                    "La carpeta FTP es demasiado grande para verificar el destino con seguridad"
+                        .into(),
+                );
+            }
+            if entries.iter().any(|info| info.name() == Path::new(name)) {
+                return Err("El destino ya existe; no se sobrescribe".into());
+            }
+        }
+    }
+    .await;
+    let close = close_stream(cursor.close_future(PRIORITY)).await;
+    result.and(close)
+}
+async fn close_stream(future: impl Future<Output = Result<(), glib::Error>>) -> Result<(), String> {
+    match select(
+        Box::pin(future),
+        Box::pin(glib::timeout_future(Duration::from_secs(30))),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result.map_err(|e| e.to_string()),
+        Either::Right(_) => Err("FTP: cierre sin respuesta".into()),
+    }
+}
+async fn copy_file(
+    source: gio::File,
+    destination: gio::File,
+    channels: &WorkerChannels,
+    lifetime: &gio::Cancellable,
+) -> Result<(), String> {
+    // Bound download memory independently of the size reported by the server.
+    // This destination is native and private; remote uploads use the curl path.
+    let exists = operation(
+        async {
+            match destination
+                .query_info_future(
+                    "standard::type",
+                    gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                    PRIORITY,
+                )
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error) if error.matches(gio::IOErrorEnum::NotFound) => Ok(false),
+                Err(error) => Err(error),
+            }
+        },
+        channels,
+        lifetime,
+    )
+    .await?;
+    if exists {
+        return Err("El destino ya existe; no se sobrescribe".into());
+    }
+    let metadata = operation(
+        source.query_info_future(
+            "standard::size",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            PRIORITY,
+        ),
+        channels,
+        lifetime,
+    )
+    .await?;
+    let total = metadata
+        .has_attribute("standard::size")
+        .then(|| metadata.size().max(0) as u64);
+    let input = operation(source.read_future(PRIORITY), channels, lifetime).await?;
+    let output = match operation(
+        destination.create_future(gio::FileCreateFlags::PRIVATE, PRIORITY),
+        channels,
+        lifetime,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = close_stream(input.close_future(PRIORITY)).await;
+            return Err(error);
         }
     };
-    match select(Box::pin(receiver), Box::pin(monitor)).await {
-        Either::Left((result, _)) => result
-            .map_err(|_| "Se cerró la operación FTP".to_string())?
-            .map_err(|e| e.to_string()),
-        Either::Right(_) => unreachable!(),
+    let mut bytes = 0u64;
+    channels.progress.send_replace(Progress { bytes, total });
+    let result = async {
+        loop {
+            let chunk = operation(
+                input.read_bytes_future(64 * 1024, PRIORITY),
+                channels,
+                lifetime,
+            )
+            .await?;
+            if chunk.is_empty() {
+                break;
+            }
+            let expected = chunk.len();
+            let writing = async {
+                match output.write_all_future(chunk, PRIORITY).await {
+                    Ok((_, n, None)) => Ok(n),
+                    Ok((_, _, Some(error))) => Err(error),
+                    Err((_, error)) => Err(error),
+                }
+            };
+            let written = operation(writing, channels, lifetime).await?;
+            if written != expected {
+                return Err("FTP: escritura incompleta".into());
+            }
+            bytes += written as u64;
+            channels.progress.send_replace(Progress { bytes, total });
+        }
+        if total.is_some_and(|total| total != bytes) {
+            return Err("El archivo cambió de tamaño durante la transferencia".into());
+        }
+        Ok(())
     }
+    .await;
+    let close_output = close_stream(output.close_future(PRIORITY)).await;
+    let close_input = close_stream(input.close_future(PRIORITY)).await;
+    result.and(close_output).and(close_input)
 }
 pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<String>) -> Client {
     let (client, mut channels) = Client::channels();
@@ -242,7 +480,14 @@ pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<S
                 Either::Left((Some(request), _)) => request,
                 _ => break,
             };
-            let transfer = matches!(request, Request::Upload { .. } | Request::Download { .. });
+            let transfer = matches!(
+                request,
+                Request::Upload { .. }
+                    | Request::Download { .. }
+                    | Request::PlanUpload { .. }
+                    | Request::PlanDownload { .. }
+                    | Request::CreateLocalDirectory(_)
+            );
             let result: Result<Event, String> = async {
                 if !mounted {
                     let result = root.mount_enclosing_volume_future(
@@ -293,6 +538,12 @@ pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<S
                             .as_mut()
                             .ok_or("Abre una carpeta primero")?
                             .page()),
+                        Request::PlanUpload { .. }
+                        | Request::PlanDownload { .. }
+                        | Request::CreateLocalDirectory(_) => Err(
+                            "Este servidor FTP heredado no admite transferencias de carpetas"
+                                .into(),
+                        ),
                         transfer => Ok(Event::Finished(
                             crate::ftp_legacy::transfer(
                                 &profile,
@@ -306,6 +557,29 @@ pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<S
                     };
                 }
                 match request {
+                    Request::PlanUpload { local, directory } => {
+                        let cancel = channels.cancel.clone();
+                        let stop = channels.stop.clone();
+                        let plan = nexuterm::runtime::runtime()
+                            .spawn_blocking(move || {
+                                nexuterm::transfer::plan_upload(local, directory, &cancel, &stop)
+                            })
+                            .await
+                            .map_err(|e| e.to_string())??;
+                        if plan.iter().any(|p|p.remote.components().any(|c|matches!(c,Component::Normal(name) if name.to_string_lossy().contains('\\')))){return Err("El árbol FTP contiene separadores inversos en los nombres".into());}
+                        Ok(Event::Planned(plan))
+                    }
+                    Request::PlanDownload { remote, local } => Ok(Event::Planned(
+                        plan_download(&profile, remote, local, &channels, &lifetime).await?,
+                    )),
+                    Request::CreateLocalDirectory(path) => {
+                        let result = nexuterm::runtime::runtime()
+                            .spawn(async move { tokio::fs::create_dir(path).await })
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string());
+                        Ok(Event::Finished(result))
+                    }
                     Request::Navigate(path) => {
                         let current = file(&profile, &path)?;
                         cursor = Some(
@@ -368,35 +642,48 @@ pub fn start(state: &Rc<State>, profile: Profile, password: zeroize::Zeroizing<S
                             )
                             .await
                         } else {
-                            match operation(
-                                destination.create_future(gio::FileCreateFlags::NONE, PRIORITY),
-                                &channels,
-                                &lifetime,
-                            )
-                            .await
-                            {
-                                Ok(stream) => {
-                                    operation(stream.close_future(PRIORITY), &channels, &lifetime)
-                                        .await
-                                        .map(|_| ())
-                                }
-                                Err(error) => Err(error),
+                            let empty = nexuterm::runtime::runtime()
+                                .spawn_blocking(tempfile::NamedTempFile::new)
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .map_err(|e| e.to_string())?;
+                            let result = async {
+                                require_absent(&profile, &path, &channels, &lifetime).await?;
+                                crate::ftp_legacy::upload_file(
+                                    &profile,
+                                    &legacy_password,
+                                    empty.path().to_path_buf(),
+                                    path,
+                                    &channels,
+                                    &lifetime,
+                                )
+                                .await
                             }
+                            .await;
+                            let _ = nexuterm::runtime::runtime()
+                                .spawn_blocking(move || drop(empty))
+                                .await;
+                            result
                         };
                         Ok(Event::Finished(result))
                     }
                     Request::Upload { local, directory } => {
                         let name = local.file_name().ok_or("Archivo local inválido")?;
-                        let destination = file(&profile, &directory.join(name))?;
-                        Ok(Event::Finished(
-                            copy(
-                                gio::File::for_path(local),
+                        let destination = nexuterm::ssh::join_remote(&directory, Path::new(name))?;
+                        let result = async {
+                            require_absent(&profile, &destination, &channels, &lifetime).await?;
+                            crate::ftp_legacy::upload_file(
+                                &profile,
+                                &legacy_password,
+                                local,
                                 destination,
                                 &channels,
                                 &lifetime,
                             )
-                            .await,
-                        ))
+                            .await
+                        }
+                        .await;
+                        Ok(Event::Finished(result))
                     }
                     Request::Download { remote, local } => Ok(Event::Finished(
                         copy(

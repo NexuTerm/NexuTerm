@@ -192,12 +192,20 @@ fn history_models_permissions_and_reasoning_are_real_protocol_requests() {
     nexuterm::runtime::runtime().block_on(async {
         let (client, mut rx) = fixture.start();
         let mut history = false;
+        let mut older_history = false;
         let mut models = false;
-        while !history || !models {
+        while !history || !older_history || !models {
             match event(&mut rx).await {
-                Event::History(data) => {
+                Event::History(data, cursor) if !history => {
                     assert_eq!(data[0]["id"], "old-thread");
+                    assert_eq!(cursor.as_deref(), Some("cursor-2"));
+                    assert!(client.history(cursor.unwrap()));
                     history = true;
+                }
+                Event::History(data, cursor) => {
+                    assert_eq!(data[0]["id"], "older-thread");
+                    assert_eq!(cursor, None);
+                    older_history = true;
                 }
                 Event::Models(data) => {
                     assert_eq!(data[0]["model"], "fixture-model");
@@ -208,7 +216,12 @@ fn history_models_permissions_and_reasoning_are_real_protocol_requests() {
             }
         }
         client.permissions(true);
-        assert!(client.resume("old-thread".into()));
+        let saved_directory = fixture.0.join("saved-folder");
+        std::fs::create_dir(&saved_directory).unwrap();
+        assert!(client.resume_in_directory(
+            "old-thread".into(),
+            Some(saved_directory.to_string_lossy().into_owned())
+        ));
         loop {
             if let Event::Resumed(thread) = event(&mut rx).await {
                 assert_eq!(thread["turns"][0]["items"][1]["text"], "Respuesta anterior");
@@ -227,11 +240,23 @@ fn history_models_permissions_and_reasoning_are_real_protocol_requests() {
         }
         client.close();
         let requests = fixture.requests();
+        let history_requests: Vec<_> = requests
+            .iter()
+            .filter(|r| r["method"] == "thread/list")
+            .collect();
+        assert_eq!(history_requests.len(), 2);
+        assert_eq!(history_requests[0]["params"]["limit"], 100);
+        assert!(history_requests[0]["params"].get("cwd").is_none());
+        assert_eq!(history_requests[1]["params"]["cursor"], "cursor-2");
         let resume = requests
             .iter()
             .find(|r| r["method"] == "thread/resume")
             .unwrap();
         assert_eq!(resume["params"]["sandbox"], "workspace-write");
+        assert_eq!(
+            resume["params"]["cwd"],
+            saved_directory.to_string_lossy().to_string()
+        );
         let turn = requests
             .iter()
             .find(|r| r["method"] == "turn/start")

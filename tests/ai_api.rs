@@ -84,11 +84,15 @@ async fn actual_transport_preserves_context_and_parses_both_api_formats() {
             let response = if kind == AiKind::Responses {
                 assert!(headers.starts_with("POST /v1/responses HTTP/"));
                 assert_eq!(body["store"], false);
-                assert_eq!(body["input"][0]["content"], history()[0].content);
+                assert_eq!(body["input"].as_array().unwrap().len(),2);
+                assert_eq!(body["input"][0]["role"],"system");
+                assert_eq!(body["input"][1]["role"],"user");
+                assert_eq!(body["input"][1]["content"], history()[0].content);
                 json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Respuesta ficticia"}]}]})
             } else {
                 assert!(headers.starts_with("POST /v1/chat/completions HTTP/"));
-                assert_eq!(body["messages"][0]["content"], history()[0].content);
+                assert_eq!(body["messages"][0]["role"], "system");
+                assert_eq!(body["messages"][1]["content"], history()[0].content);
                 json!({"choices":[{"message":{"content":"Respuesta ficticia"}}]})
             }.to_string();
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
@@ -165,4 +169,114 @@ async fn cancelling_the_task_closes_the_transport_connection() {
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
     server.join().unwrap();
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn completed_api_context_rehydrates_without_network_or_tool_replay() {
+    use nexuterm::codex::{Client, Event};
+    for kind in [AiKind::Responses, AiKind::ChatCompletions] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = count.clone();
+        let server = thread::spawn(move || {
+            for index in 1..=2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let (_, body) = read_request(&mut stream);
+                let messages = body[if kind == AiKind::Responses {
+                    "input"
+                } else {
+                    "messages"
+                }]
+                .as_array()
+                .unwrap();
+                assert_eq!(
+                    messages.last().unwrap()["content"],
+                    if index == 1 { "primero" } else { "segundo" }
+                );
+                if index == 2 {
+                    if kind == AiKind::Responses {
+                        assert_eq!(messages.len(), 3);
+                        assert_eq!(messages[0]["content"], "primero");
+                        assert_eq!(messages[1]["content"], "respuesta-1");
+                    } else {
+                        assert_eq!(messages.len(), 4);
+                        assert_eq!(messages[0]["role"], "system");
+                        assert_eq!(messages[1]["content"], "primero");
+                        assert_eq!(messages[2]["content"], "respuesta-1");
+                    }
+                }
+                counted.fetch_add(1, Ordering::Relaxed);
+                let answer = format!("respuesta-{index}");
+                let value = if kind == AiKind::Responses {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":answer}]}]})
+                } else {
+                    json!({"choices":[{"message":{"content":answer}}]})
+                };
+                let data = value.to_string();
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",data.len(),data).unwrap();
+            }
+        });
+        let profile = agent(port, kind);
+        nexuterm::runtime::runtime().block_on(async {
+            async fn event(rx: &mut tokio::sync::mpsc::Receiver<Event>) -> Event {
+                tokio::time::timeout(Duration::from_secs(8), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+            let (client, mut rx) = Client::start(profile.clone(), false);
+            client.credentials(Ok(Zeroizing::new("fixture-key".into())));
+            loop {
+                if let Event::Ready(true) = event(&mut rx).await {
+                    break;
+                }
+            }
+            assert!(client.send("primero".into()));
+            let mut checkpoint = None;
+            loop {
+                match event(&mut rx).await {
+                    Event::Continuation(value) => checkpoint = Some(value),
+                    Event::Finished(_) => break,
+                    Event::Error(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            client.close();
+            let encoded = serde_json::to_vec(&checkpoint.unwrap()).unwrap();
+            assert!(!String::from_utf8_lossy(&encoded).contains("fixture-key"));
+            let checkpoint = serde_json::from_slice(&encoded).unwrap();
+            let (client, mut rx) = Client::start_recovery(profile, false);
+            client.credentials(Ok(Zeroizing::new("fixture-key".into())));
+            loop {
+                if let Event::Ready(true) = event(&mut rx).await {
+                    break;
+                }
+            }
+            assert!(client.restore(checkpoint));
+            loop {
+                match event(&mut rx).await {
+                    Event::Continued => break,
+                    Event::Error(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                count.load(Ordering::Relaxed),
+                1,
+                "restoring context must not contact the provider"
+            );
+            assert!(client.send("segundo".into()));
+            loop {
+                match event(&mut rx).await {
+                    Event::Finished(_) => break,
+                    Event::Error(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            client.close();
+        });
+        server.join().unwrap();
+    }
 }

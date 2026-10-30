@@ -37,6 +37,7 @@ impl Controller {
             for tracker in trackers {
                 tracker.flush().await?;
             }
+            crate::chat_history_ui::flush(state).await;
             let journal = self.journal.borrow().as_ref().unwrap().clone();
             let snapshot = workspace_ui::capture(
                 state,

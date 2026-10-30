@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CLIENTS = (
     ("SSH/SFTP", ("ssh",), "openssh-client"),
     ("Telnet", ("telnet",), "inetutils-telnet"),
-    ("FTP Windows CE", ("curl",), "curl"),
+    ("FTP y Windows CE", ("curl",), "curl"),
 )
 MINIMUM_LIBRARIES = {
     "libgtk-4-1": "4.10",

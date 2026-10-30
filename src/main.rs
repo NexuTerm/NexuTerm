@@ -1,16 +1,22 @@
 mod askpass;
+mod context_menu;
 mod desktop_view;
 mod file_browser;
 mod files;
+mod editor_compare;
+mod widget_state;
 mod recovery_ui;
+mod chat_history_ui;
 mod syntax;
 mod ftp;
 mod ftp_legacy;
 mod ftp_transfer;
 mod remote_panel;
+mod transfer_queue_ui;
 mod sftp_session;
 mod terminal_colors;
 mod ui;
+mod supervised_ui;
 use gtk::{glib, prelude::*};
 
 fn main() -> glib::ExitCode {

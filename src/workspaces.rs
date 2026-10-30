@@ -18,6 +18,8 @@ pub enum Target {
     Connection {
         profile_id: String,
         #[serde(default)]
+        browser: Option<BrowserView>,
+        #[serde(default)]
         directory: Option<PathBuf>,
     },
     Unavailable {
@@ -25,16 +27,94 @@ pub enum Target {
     },
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorView {
+    pub cursor: u32,
+    pub anchor: u32,
+    pub vertical: f64,
+    pub horizontal: f64,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserView {
+    pub hidden: bool,
+    pub selected: Option<PathBuf>,
+    pub vertical: f64,
+    pub horizontal: f64,
+}
+fn valid_scroll(vertical: f64, horizontal: f64) -> bool {
+    [vertical, horizontal]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+}
+impl EditorView {
+    fn validate(&self) -> Result<(), String> {
+        if self.cursor > 8 * 1024 * 1024
+            || self.anchor > 8 * 1024 * 1024
+            || !valid_scroll(self.vertical, self.horizontal)
+        {
+            return Err("Estado del editor inválido".into());
+        }
+        Ok(())
+    }
+}
+impl BrowserView {
+    fn validate(&self) -> Result<(), String> {
+        if !valid_scroll(self.vertical, self.horizontal)
+            || self.selected.as_ref().is_some_and(|p| {
+                p.as_os_str().len() > 4096
+                    || p.components().count() != 1
+                    || !matches!(p.components().next(), Some(std::path::Component::Normal(_)))
+                    || p.to_string_lossy().chars().any(char::is_control)
+            })
+        {
+            return Err("Estado del explorador inválido".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalView {
+    pub zoom: f64,
+    pub focused: bool,
+}
+impl Default for TerminalView {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            focused: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum Layout {
+    Desktop {
+        profile_id: String,
+        protocol: crate::config::Protocol,
+    },
+    FileBrowser {
+        profile_id: String,
+        #[serde(default)]
+        view: Option<BrowserView>,
+        protocol: crate::config::Protocol,
+        directory: Option<PathBuf>,
+    },
     Document {
         id: String,
         source: crate::recovery::Source,
         had_draft: bool,
+        #[serde(default)]
+        view: Option<EditorView>,
     },
     Terminal {
         target: Target,
+        #[serde(default)]
+        view: TerminalView,
     },
     Split {
         vertical: bool,
@@ -71,6 +151,21 @@ pub struct Chat {
     pub codex_thread: Option<String>,
     pub messages: Vec<ChatMessage>,
     pub draft: String,
+    #[serde(default)]
+    pub attachments: Vec<PathBuf>,
+    #[serde(default)]
+    pub reasoning: String,
+    #[serde(default)]
+    pub continuation: Option<crate::chat_state::Continuation>,
+    #[serde(default)]
+    pub archive: Option<String>,
+    #[serde(default = "capture_history_default")]
+    pub capture_history: bool,
+    #[serde(default)]
+    pub scroll: Option<f64>,
+}
+fn capture_history_default() -> bool {
+    true
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -80,12 +175,36 @@ pub struct Chats {
     pub visible: bool,
 }
 impl Chats {
-    fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         if self.tabs.len() > 8 || (!self.tabs.is_empty() && self.selected >= self.tabs.len()) {
             return Err("Selección o número de chats inválido".into());
         }
         let mut ids = std::collections::HashSet::new();
         for chat in &self.tabs {
+            if let Some(continuation) = &chat.continuation {
+                continuation.validate()?;
+            }
+            if let Some(id) = &chat.archive {
+                uuid::Uuid::parse_str(id).map_err(|_| "Referencia de historial inválida")?;
+                if id != &chat.id {
+                    return Err("El historial no corresponde al chat".into());
+                }
+            }
+            if chat
+                .scroll
+                .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+            {
+                return Err("Posición del chat inválida".into());
+            }
+            if chat.attachments.len() > 20
+                || chat
+                    .attachments
+                    .iter()
+                    .any(|p| !p.is_absolute() || p.as_os_str().len() > 4096)
+                || chat.reasoning.len() > 128
+            {
+                return Err("Adjuntos o razonamiento inválidos".into());
+            }
             uuid::Uuid::parse_str(&chat.id).map_err(|_| "Identificador de chat inválido")?;
             if !ids.insert(&chat.id)
                 || chat.messages.len() > 128
@@ -120,6 +239,8 @@ pub struct Workspace {
     pub directory: Option<PathBuf>,
     pub sidebar_visible: bool,
     #[serde(default)]
+    pub browser: Option<BrowserView>,
+    #[serde(default)]
     pub chats: Chats,
 }
 
@@ -145,7 +266,60 @@ impl Layout {
             return Err("Demasiadas divisiones anidadas".into());
         }
         match self {
-            Self::Document { id, source, .. } => {
+            Self::Desktop {
+                profile_id,
+                protocol,
+            } => {
+                if depth != 0
+                    || profile_id.is_empty()
+                    || profile_id.len() > 4096
+                    || !matches!(
+                        protocol,
+                        crate::config::Protocol::Rdp | crate::config::Protocol::Vnc
+                    )
+                {
+                    return Err("Referencia de escritorio remoto inválida".into());
+                }
+                *leaves += 1;
+                if *leaves > 128 {
+                    return Err("Máximo 128 paneles por espacio".into());
+                }
+            }
+            Self::FileBrowser {
+                profile_id,
+                protocol,
+                directory,
+                view,
+            } => {
+                if let Some(view) = view {
+                    view.validate()?;
+                }
+                if depth != 0
+                    || profile_id.is_empty()
+                    || profile_id.len() > 4096
+                    || !matches!(
+                        protocol,
+                        crate::config::Protocol::Ftp | crate::config::Protocol::Sftp
+                    )
+                    || directory.as_ref().is_some_and(|p| {
+                        !p.is_absolute()
+                            || p.as_os_str().len() > 4096
+                            || p.to_string_lossy().chars().any(char::is_control)
+                    })
+                {
+                    return Err("Referencia de explorador remoto inválida".into());
+                }
+                *leaves += 1;
+                if *leaves > 128 {
+                    return Err("Máximo 128 paneles por espacio".into());
+                }
+            }
+            Self::Document {
+                id, source, view, ..
+            } => {
+                if let Some(view) = view {
+                    view.validate()?;
+                }
                 if depth != 0 {
                     return Err("Los documentos solo se restauran en pestañas completas".into());
                 }
@@ -156,7 +330,17 @@ impl Layout {
                     return Err("Máximo 128 paneles por espacio".into());
                 }
             }
-            Self::Terminal { target } => {
+            Self::Terminal { target, view } => {
+                if let Target::Connection {
+                    browser: Some(browser),
+                    ..
+                } = target
+                {
+                    browser.validate()?;
+                }
+                if !view.zoom.is_finite() || !(0.5..=3.0).contains(&view.zoom) {
+                    return Err("Zoom de terminal inválido".into());
+                }
                 *leaves += 1;
                 if *leaves > 128 {
                     return Err("Máximo 128 paneles por espacio".into());
@@ -206,6 +390,9 @@ impl Store {
         let mut ids = std::collections::HashSet::new();
         for workspace in &self.workspaces {
             workspace.chats.validate()?;
+            if let Some(view) = &workspace.browser {
+                view.validate()?;
+            }
             if workspace.id.is_empty() || !ids.insert(&workspace.id) {
                 return Err("Identificador de espacio inválido o duplicado".into());
             }
@@ -297,6 +484,180 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_browser_references_roundtrip_and_reject_invalid_layouts() {
+        for protocol in [crate::config::Protocol::Ftp, crate::config::Protocol::Sftp] {
+            let layout = Layout::FileBrowser {
+                view: None,
+                profile_id: "saved-profile".into(),
+                protocol,
+                directory: Some(PathBuf::from("/data/project with spaces")),
+            };
+            let encoded = serde_json::to_vec(&layout).unwrap();
+            let decoded: Layout = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(layout, decoded);
+            decoded.validate(0, &mut 0).unwrap();
+            assert!(decoded.validate(1, &mut 0).is_err());
+        }
+        for (protocol, path) in [
+            (crate::config::Protocol::Ssh, "/valid"),
+            (crate::config::Protocol::Ftp, "relative"),
+            (crate::config::Protocol::Sftp, "/bad\npath"),
+        ] {
+            assert!(
+                Layout::FileBrowser {
+                    view: None,
+                    profile_id: "profile".into(),
+                    protocol,
+                    directory: Some(PathBuf::from(path))
+                }
+                .validate(0, &mut 0)
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn desktop_references_are_offline_and_validated() {
+        for protocol in [crate::config::Protocol::Rdp, crate::config::Protocol::Vnc] {
+            let layout = Layout::Desktop {
+                profile_id: "desktop-profile".into(),
+                protocol,
+            };
+            let text = serde_json::to_string(&layout).unwrap();
+            assert_eq!(serde_json::from_str::<Layout>(&text).unwrap(), layout);
+            layout.validate(0, &mut 0).unwrap();
+            assert!(layout.validate(1, &mut 0).is_err());
+            assert!(layout.validate(0, &mut 128).is_err());
+            assert!(!text.contains("password"));
+        }
+        for (profile_id, protocol) in [
+            ("", crate::config::Protocol::Rdp),
+            ("profile", crate::config::Protocol::Ssh),
+        ] {
+            assert!(
+                Layout::Desktop {
+                    profile_id: profile_id.into(),
+                    protocol
+                }
+                .validate(0, &mut 0)
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn visual_defaults_and_limits() {
+        let old: Layout = serde_json::from_str(
+            r#"{"kind":"Terminal","target":{"kind":"Local","directory":null}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            old,
+            Layout::Terminal {
+                view: TerminalView {
+                    zoom: 1.0,
+                    focused: false
+                },
+                ..
+            }
+        ));
+        for zoom in [0.49, 3.01, f64::NAN] {
+            assert!(
+                Layout::Terminal {
+                    target: Target::Local { directory: None },
+                    view: TerminalView {
+                        zoom,
+                        focused: true
+                    }
+                }
+                .validate(0, &mut 0)
+                .is_err()
+            );
+        }
+        let mut w = workspace();
+        let chat:Chat=serde_json::from_value(serde_json::json!({"id":uuid::Uuid::new_v4().to_string(),"title":"fixture","agent_id":null,"model":"","directory":null,"codex_thread":null,"messages":[],"draft":""})).unwrap();
+        assert_eq!(chat.scroll, None);
+        w.chats.tabs.push(chat);
+        for scroll in [Some(-0.1), Some(1.1), Some(f64::NAN)] {
+            w.chats.tabs[0].scroll = scroll;
+            assert!(w.chats.validate().is_err());
+        }
+        for scroll in [None, Some(0.0), Some(0.35), Some(1.0)] {
+            w.chats.tabs[0].scroll = scroll;
+            w.chats.validate().unwrap();
+        }
+    }
+    #[test]
+    fn editor_browser_views_defaults_limits_and_paths() {
+        let view: BrowserView = serde_json::from_str("{}").unwrap();
+        assert_eq!(view, BrowserView::default());
+        for name in ["../other", "/absolute", "nested/file", ".", "bad\nname", ""] {
+            assert!(
+                BrowserView {
+                    selected: Some(name.into()),
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for value in [-0.1, 1.1, f64::NAN] {
+            assert!(
+                BrowserView {
+                    vertical: value,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+            assert!(
+                EditorView {
+                    horizontal: value,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            EditorView {
+                cursor: 8 * 1024 * 1024 + 1,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        let mut w = workspace();
+        w.browser = Some(BrowserView {
+            hidden: true,
+            selected: Some(".á.txt".into()),
+            vertical: 0.4,
+            horizontal: 0.2,
+        });
+        w.tabs[0].layout = Layout::Document {
+            id: uuid::Uuid::new_v4().to_string(),
+            source: crate::recovery::Source::Local {
+                path: "/tmp/fixture".into(),
+                etag: None,
+            },
+            had_draft: false,
+            view: Some(EditorView {
+                cursor: 80,
+                anchor: 15,
+                vertical: 0.45,
+                horizontal: 0.0,
+            }),
+        };
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("workspace.json");
+        let store = Store {
+            version: 1,
+            workspaces: vec![w],
+        };
+        store.save(&path).unwrap();
+        assert_eq!(Store::load(&path).unwrap().workspaces, store.workspaces);
+        let legacy:Layout=serde_json::from_value(serde_json::json!({"kind":"Document","id":uuid::Uuid::new_v4().to_string(),"source":{"kind":"Local","path":"/tmp/fixture","etag":null},"had_draft":false})).unwrap();
+        assert!(matches!(legacy, Layout::Document { view: None, .. }));
+    }
     fn workspace() -> Workspace {
         Workspace {
             id: "fixture".into(),
@@ -305,6 +666,7 @@ mod tests {
             tabs: vec![Tab {
                 title: "Terminal".into(),
                 layout: Layout::Terminal {
+                    view: Default::default(),
                     target: Target::Local {
                         directory: Some("/tmp".into()),
                     },
@@ -313,6 +675,7 @@ mod tests {
             selected: 0,
             directory: Some("/tmp".into()),
             sidebar_visible: true,
+            browser: None,
             chats: Chats::default(),
         }
     }
@@ -382,6 +745,7 @@ mod tests {
         let path = root.path().join("workspaces.json");
         let mut workspace = workspace();
         let document = Layout::Document {
+            view: None,
             id: uuid::Uuid::new_v4().to_string(),
             source: crate::recovery::Source::Local {
                 path: "/tmp/document.txt".into(),
@@ -438,6 +802,12 @@ mod tests {
                     response: false,
                 }],
                 draft: "Sin enviar".into(),
+                attachments: vec![],
+                reasoning: String::new(),
+                continuation: None,
+                archive: None,
+                capture_history: true,
+                scroll: None,
             }],
             selected: 0,
             visible: true,

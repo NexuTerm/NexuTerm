@@ -84,6 +84,7 @@ def serve(listener, events, failures, password_auth):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--password', action='store_true', help='exercise the VNC password challenge')
+    parser.add_argument('--workspace', action='store_true', help='restore a saved workspace before connecting')
     args = parser.parse_args()
     artifacts = ROOT / 'artifacts'
     artifacts.mkdir(exist_ok=True)
@@ -101,6 +102,9 @@ def main():
         env.update(XDG_CONFIG_HOME=directory, NEXUTERM_SMOKE_TEST='1',
                    NEXUTERM_SMOKE_VNC=str(listener.getsockname()[1]),
                    NEXUTERM_VNC_SCREENSHOT=str(artifacts / 'vnc-integrated.png'), GSK_RENDERER='cairo')
+        if args.workspace:
+            env.update(NEXUTERM_SMOKE_VNC_WORKSPACE='1', XDG_DATA_HOME=str(Path(directory) / 'data'),
+                       XDG_STATE_HOME=str(Path(directory) / 'state'), XDG_CACHE_HOME=str(Path(directory) / 'cache'))
         if args.password:
             env['NEXUTERM_SMOKE_VNC_PASSWORD'] = '1'
         result = subprocess.run(['xvfb-run', '-a', 'dbus-run-session', '--',
@@ -112,6 +116,8 @@ def main():
         assert not failures, failures
         assert result.returncode == 0, result.stderr
         assert 'NEXUTERM_SMOKE_VNC_OK' in result.stderr, result.stderr
+        if args.workspace:
+            assert 'NEXUTERM_SMOKE_VNC_WORKSPACE_OK' in result.stderr, result.stderr
         if args.password:
             assert ('password-response',) in events
         for event in [('frame',), ('key', 1, ord('a')), ('key', 0, ord('a')),

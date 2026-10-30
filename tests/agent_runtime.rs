@@ -282,3 +282,111 @@ if sys.argv[1:] == ['login', '--web-flow']:
         client.close();
     });
 }
+
+#[test]
+fn acp_recovery_honours_capabilities_denies_replay_and_never_creates_a_new_session() {
+    for (flag, success, method) in [
+        ("support-load", true, "session/load"),
+        ("support-resume", true, "session/resume"),
+        ("unsupported", false, ""),
+        ("load-failure", false, "session/load"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("acp");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/usr/bin/python3\n{}",
+                include_str!("../lab/acp_fixture.py")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if flag != "unsupported" {
+            std::fs::write(
+                dir.path().join(if flag == "load-failure" {
+                    "support-load"
+                } else {
+                    flag
+                }),
+                "",
+            )
+            .unwrap();
+        }
+        if flag == "load-failure" {
+            std::fs::write(dir.path().join(flag), "").unwrap();
+        }
+        let agent = AiAgent {
+            id: "recovery-fixture".into(),
+            kind: AiKind::Acp,
+            program: program.to_string_lossy().into(),
+            directory: dir.path().to_string_lossy().into(),
+            runtime_root: Some(dir.path().join("private")),
+            ..Default::default()
+        };
+        let saved = nexuterm::chat_state::Continuation::Acp {
+            destination: nexuterm::chat_state::destination(&agent),
+            session_id: "fixture-session".into(),
+        };
+        nexuterm::runtime::runtime().block_on(async {
+            let (client, mut rx) = Client::start_recovery(agent, false);
+            loop {
+                match next(&mut rx).await {
+                    Event::Ready(true) => break,
+                    Event::Error(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            assert!(client.restore(saved));
+            let mut continued = false;
+            loop {
+                match next(&mut rx).await {
+                    Event::Continued => {
+                        continued = true;
+                        break;
+                    }
+                    Event::Error(e) => {
+                        assert!(!success, "{e}");
+                        break;
+                    }
+                    Event::Delta { .. } | Event::Request { .. } => {
+                        panic!("replayed content/tools must not be executed or redisplayed")
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(continued, success);
+            if continued {
+                assert!(client.send("hello".into()));
+                let mut answer = String::new();
+                loop {
+                    match next(&mut rx).await {
+                        Event::Delta { text, .. } => answer.push_str(&text),
+                        Event::Finished(s) => {
+                            assert_eq!(s, "completed");
+                            break;
+                        }
+                        Event::Error(e) => panic!("{e}"),
+                        _ => {}
+                    }
+                }
+                assert_eq!(answer, "Respuesta ACP gráfica.");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            client.close();
+        });
+        let log = std::fs::read_to_string(dir.path().join("acp-protocol.jsonl")).unwrap();
+        let requests: Vec<Value> = log
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert!(!requests.iter().any(|v| v["method"] == "session/new"));
+        if !method.is_empty() {
+            assert_eq!(requests.iter().filter(|v| v["method"] == method).count(), 1);
+        }
+        if flag == "support-load" {
+            assert!(requests.iter().any(|v| v["id"] == "replay-permission"
+                && v["result"]["outcome"]["outcome"] == "cancelled"));
+        }
+    }
+}

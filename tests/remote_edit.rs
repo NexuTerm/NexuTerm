@@ -136,6 +136,7 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
         id: uuid::Uuid::new_v4().to_string(),
         source: doc.recovery_source(),
         text: "Cambios remotos sin guardar\n".into(),
+        base_text: Some(original.into()),
     };
     let journal = nexuterm::recovery::Journal::new(&root.join("recovery"), &draft.id).unwrap();
     journal.advance(1);
@@ -197,6 +198,38 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
             .contains("9")
     );
     drop(doc);
+    // Three-version review rejects stale content and metadata, and never publishes by itself.
+    let review_path=root.join("remote/review.txt");
+    tokio::fs::write(&review_path,"base\n").await.unwrap();
+    tokio::fs::set_permissions(&review_path,std::fs::Permissions::from_mode(0o2640)).await.unwrap();
+    let review_doc=RemoteDocument::open(connection.clone(),review_path.clone()).await.unwrap();
+    review_doc.save("base\n".into()).await.unwrap();
+    assert_eq!(std::fs::metadata(&review_path).unwrap().permissions().mode()&0o7777,0o2640);
+    tokio::fs::write(review_doc.local_path(),"local\n").await.unwrap();
+    tokio::fs::write(&review_path,"server\n").await.unwrap();
+    assert!(review_doc.save("local\n".into()).await.unwrap_err().contains("Conflicto"));
+    let comparison=review_doc.comparison().await.unwrap();
+    assert_eq!(comparison.base.as_deref(),Some("base\n"));assert_eq!(comparison.remote,"server\n");
+    tokio::fs::write(&review_path,"server newer\n").await.unwrap();
+    assert!(review_doc.accept_comparison(&comparison).await.unwrap_err().contains("volvió a cambiar"));
+    let comparison=review_doc.comparison().await.unwrap();
+    review_doc.accept_comparison(&comparison).await.unwrap();
+    assert_eq!(tokio::fs::read_to_string(&review_path).await.unwrap(),"server newer\n");
+    tokio::fs::set_permissions(&review_path,std::fs::Permissions::from_mode(0o600)).await.unwrap();
+    assert!(review_doc.save("local\n".into()).await.unwrap_err().contains("metadatos"));
+    let comparison=review_doc.comparison().await.unwrap();
+    review_doc.accept_comparison(&comparison).await.unwrap();
+    review_doc.save("local\n".into()).await.unwrap();
+    assert_eq!(std::fs::metadata(&review_path).unwrap().permissions().mode()&0o7777,0o600);
+    assert_eq!(review_doc.comparison().await.unwrap().base.as_deref(),Some("local\n"));
+    // Recovery with a changed origin remains guarded until an explicit review.
+    let preview=RemoteDocument::recovery_preview(connection.clone(),&draft.source,draft.base_text.clone()).await.unwrap();
+    assert!(preview.requires_review());
+    assert!(preview.save("anything".into()).await.unwrap_err().contains("Conflicto"));
+    let comparison=preview.comparison().await.unwrap();
+    assert_eq!(comparison.base.as_deref(),Some(original));
+    preview.accept_comparison(&comparison).await.unwrap();assert!(!preview.requires_review());
+    drop(preview);
     let recovered =
         nexuterm::recovery::read(&root.join("recovery").join(format!("{}.json", draft.id)))
             .unwrap();
@@ -316,6 +349,16 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     let doc = RemoteDocument::open(connection.clone(), remote.clone())
         .await
         .unwrap();
+    // Supervised SSH runs in its own channel with explicit cwd and no terminal injection.
+    let job_dir=root.join("remote/space ' supervised");tokio::fs::create_dir(&job_dir).await.unwrap();
+    let spec=|command:&str,timeout_secs:u64|nexuterm::execution::Spec{command:command.into(),directory:job_dir.clone(),timeout_secs,keep_history:false};
+    let job=nexuterm::execution::start(spec("printf '%s' \"$PWD\"; printf 'remote error' >&2; exit 13",5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();
+    let result=execution_done(&job).await;assert_eq!(result.stdout,job_dir.to_string_lossy().as_bytes());assert_eq!(result.stderr,b"remote error");assert_eq!(result.exit_code,Some(13));assert_eq!(result.status,nexuterm::execution::Status::Completed);
+    let job=nexuterm::execution::start(spec("sleep 2",1),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();let result=execution_done(&job).await;assert_eq!(result.status,nexuterm::execution::Status::Unknown);assert_eq!(result.exit_code,None);
+    let job=nexuterm::execution::start(spec("sleep 2",5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();
+    for _ in 0..100{if job.snapshot().status==nexuterm::execution::Status::Running{break;}tokio::time::sleep(std::time::Duration::from_millis(10)).await;}job.cancel();assert_eq!(execution_done(&job).await.status,nexuterm::execution::Status::Unknown);
+    assert_eq!(connection.capture("printf channel_alive").await.unwrap(),"channel_alive");
+    let job=nexuterm::execution::start(spec("exit 255",5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();assert_eq!(execution_done(&job).await.status,nexuterm::execution::Status::Unknown);
     connection.closed.store(true, Ordering::Relaxed);
     assert!(doc.save("other".into()).await.is_err());
     assert!(
@@ -378,4 +421,8 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
             .len(),
         EDIT_LIMIT as u64
     );
+}
+
+async fn execution_done(handle:&nexuterm::execution::Handle)->nexuterm::execution::Record{
+    tokio::time::timeout(std::time::Duration::from_secs(8),async{while !handle.finished(){tokio::time::sleep(std::time::Duration::from_millis(10)).await;}}).await.unwrap();handle.snapshot()
 }

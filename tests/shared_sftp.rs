@@ -172,6 +172,107 @@ async fn laboratory(protocol: Protocol) {
     );
     assert!(!cancelled.exists());
     cancel.store(false, Ordering::Relaxed);
+    // Cancelling after bytes have moved must not publish a partial final file.
+    assert!(
+        channel.sftp.support_hardlink(),
+        "Our OpenSSH laboratory must support exclusive publication"
+    );
+    let large = local.path().join("cancel-during.bin");
+    let sparse = std::fs::File::create(&large).unwrap();
+    sparse.set_len(16 * 1024 * 1024).unwrap();
+    drop(sparse);
+    let mut updates = progress.subscribe();
+    progress.send_replace(transfer::Progress::default());
+    let copying = transfer::upload(
+        &channel.sftp,
+        large.clone(),
+        remote.clone(),
+        &cancel,
+        &stop,
+        &progress,
+    );
+    let cancelling = async {
+        loop {
+            if updates.borrow().bytes > 0 {
+                cancel.store(true, Ordering::Relaxed);
+                break;
+            }
+            updates.changed().await.unwrap();
+        }
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(copying, cancelling)
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    assert!(
+        channel
+            .sftp
+            .fs()
+            .symlink_metadata(remote.join("cancel-during.bin"))
+            .await
+            .is_err()
+    );
+    cancel.store(false, Ordering::Relaxed);
+    transfer::upload(
+        &channel.sftp,
+        large,
+        remote.clone(),
+        &cancel,
+        &stop,
+        &progress,
+    )
+    .await
+    .unwrap();
+    let cancelled_download = local.path().join("cancel-during-download.bin");
+    progress.send_replace(transfer::Progress::default());
+    let mut updates = progress.subscribe();
+    let copying = transfer::download(
+        &channel.sftp,
+        remote.join("cancel-during.bin"),
+        cancelled_download.clone(),
+        &cancel,
+        &stop,
+        &progress,
+    );
+    let cancelling = async {
+        loop {
+            if updates.borrow().bytes > 0 {
+                cancel.store(true, Ordering::Relaxed);
+                break;
+            }
+            updates.changed().await.unwrap();
+        }
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(copying, cancelling)
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    assert!(!cancelled_download.exists());
+    cancel.store(false, Ordering::Relaxed);
+    transfer::download(
+        &channel.sftp,
+        remote.join("cancel-during.bin"),
+        cancelled_download.clone(),
+        &cancel,
+        &stop,
+        &progress,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::metadata(cancelled_download).unwrap().len(),
+        16 * 1024 * 1024
+    );
+    channel
+        .sftp
+        .fs()
+        .remove_file(remote.join("cancel-during.bin"))
+        .await
+        .unwrap();
     // More than one page, without accumulating a directory's entire listing in the UI.
     for i in 0..205 {
         channel

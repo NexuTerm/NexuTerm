@@ -12,6 +12,9 @@ use std::{
 use vte4::prelude::*;
 
 pub struct State {
+    pub(crate) supervised: RefCell<Option<Rc<crate::supervised_ui::Controller>>>,
+    pub(crate) transfer_queues: RefCell<std::collections::HashMap<String,Weak<crate::transfer_queue_ui::Controller>>>,
+    pub(crate) chat_archives: RefCell<Vec<Rc<nexuterm::chat_history::Recorder>>>,
     session_recovery: RefCell<Option<Rc<session_ui::Controller>>>,
     ai_workspace: RefCell<Option<ai_panel::WorkspaceChats>>,
     ai_process: RefCell<Option<Rc<ai_panel::Process>>>,
@@ -21,28 +24,30 @@ pub struct State {
     sidebar: gtk::ListBox,
     connections_side: gtk::Box,
     local_directory: RefCell<Option<(glib::WeakRef<vte4::Terminal>, PathBuf)>>,
-    local_files: RefCell<Option<Rc<crate::file_browser::LocalPane>>>,
+    pub(crate) local_files: RefCell<Option<Rc<crate::file_browser::LocalPane>>>,
     pub(crate) local_browsers: RefCell<Vec<Weak<crate::file_browser::LocalPane>>>,
     pub(crate) remote_browsers: RefCell<Vec<Weak<crate::remote_panel::Panel>>>,
     sidebar_area: gtk::Box,
     sidebar_stack: gtk::Stack,
     remote_panels: RefCell<Vec<(glib::WeakRef<gtk::Widget>, glib::WeakRef<gtk::Box>)>>,
-    window: glib::WeakRef<gtk::ApplicationWindow>,
+    pub(crate) window: glib::WeakRef<gtk::ApplicationWindow>,
     manager: RefCell<glib::WeakRef<gtk::ApplicationWindow>>,
     pub(crate) config: RefCell<Config>,
     path: PathBuf,
     config_writable: bool,
     sessions: RefCell<Vec<Weak<Session>>>,
     ftp_passwords: RefCell<std::collections::HashMap<crate::ftp::Key, zeroize::Zeroizing<String>>>,
+    workspace_focus: RefCell<glib::WeakRef<gtk::Widget>>,
     focused_terminal: RefCell<glib::WeakRef<vte4::Terminal>>,
     pub documents: RefCell<Vec<glib::WeakRef<gtk::TextBuffer>>>,
     pub writes: RefCell<Vec<Weak<Cell<bool>>>>,
     pub operations: RefCell<Vec<glib::WeakRef<gio::Cancellable>>>,
     pub desktops: RefCell<Vec<std::sync::Weak<nexuterm::desktop::Desktop>>>,
     pub sftp_masters: RefCell<Vec<std::sync::Weak<crate::sftp_session::Master>>>,
-    workspace_placeholders: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Target)>>,
+    transfer_tabs: RefCell<Vec<(glib::WeakRef<gtk::Widget>, String, Protocol, Weak<crate::remote_panel::Panel>)>>,
+    workspace_placeholders: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Layout)>>,
     workspace_manager: RefCell<glib::WeakRef<gtk::Window>>,
-    workspace_documents: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Layout)>>,
+    pub(crate) workspace_documents: RefCell<Vec<(glib::WeakRef<gtk::Widget>, nexuterm::workspaces::Layout)>>,
     workspace_panels: RefCell<Vec<(glib::WeakRef<gtk::Widget>, Rc<crate::remote_panel::Panel>)>>,
     pub(crate) recoveries: RefCell<Vec<Weak<crate::recovery_ui::Tracker>>>,
     pub(crate) recovery_manager: RefCell<glib::WeakRef<gtk::Window>>,
@@ -84,6 +89,16 @@ pub(crate) use actions::icon_button;
 use actions::install_actions;
 
 impl State {
+    pub(crate) fn chat_snapshots(&self)->Vec<nexuterm::workspaces::Chat>{
+        self.ai_workspace.borrow().as_ref().map(|chats|(chats.capture)().tabs).unwrap_or_default()
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn execution_broker(&self)->Option<Rc<nexuterm::terminal_mcp::Broker>>{self.ai_process.borrow().as_ref().and_then(|p|p.bridge.clone())}
+    pub(crate) fn execution_targets(&self)->Vec<(String,String,nexuterm::execution::Target)>{
+        let mut targets=vec![("local".into(),"Este equipo".into(),nexuterm::execution::Target::Local)];
+        for session in self.sessions.borrow().iter().filter_map(Weak::upgrade){if let Some(connection)=&session.connection{if session.pid.get().is_some()&&!connection.closed.load(std::sync::atomic::Ordering::Relaxed){let target=nexuterm::execution::Target::Ssh(connection.clone());let label=format!("{} · {}",session.title,target.destination().label);targets.push((session.id.clone(),label,target));}}}targets
+    }
     pub(crate) fn window(&self) -> Option<gtk::ApplicationWindow> { self.window.upgrade() }
     pub(crate) fn recovery_connection(&self, profile_id: &str, destination: &str) -> Option<std::sync::Arc<nexuterm::ssh::SshConnection>> {
         self.sessions.borrow().iter().filter_map(Weak::upgrade).filter_map(|s|s.connection.clone())
@@ -173,8 +188,8 @@ pub fn build(app: &gtk::Application) {
     header.pack_end(&menu_button);
     root.add_top_bar(&header);
     let context = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    context.set_margin_start(6);
-    context.set_margin_end(6);
+    context.set_margin_start(0);
+    context.set_margin_end(0);
     context.set_margin_top(0);
     context.set_margin_bottom(0);
     context.add_css_class("toolbar");
@@ -209,8 +224,8 @@ pub fn build(app: &gtk::Application) {
     side.add_css_class("nexuterm-panel");
     side.set_margin_start(0);
     side.set_margin_end(0);
-    side.set_margin_top(2);
-    side.set_margin_bottom(8);
+    side.set_margin_top(0);
+    side.set_margin_bottom(0);
     side.set_width_request(220);
     let title = gtk::Label::new(Some("CONEXIONES GUARDADAS"));
     title.set_xalign(0.0);
@@ -264,9 +279,9 @@ pub fn build(app: &gtk::Application) {
     workspace.add_css_class("nexuterm-workspace");
     workspace.set_overflow(gtk::Overflow::Hidden);
     tabbar.set_overflow(gtk::Overflow::Hidden);
-    workspace.set_margin_top(2);
+    workspace.set_margin_top(0);
     workspace.set_margin_end(0);
-    workspace.set_margin_bottom(8);
+    workspace.set_margin_bottom(0);
     workspace.append(&context);
     workspace.append(&tabbar);
     workspace.append(&notebook);
@@ -296,12 +311,16 @@ pub fn build(app: &gtk::Application) {
     ai_split.set_shrink_end_child(false);
     root.set_content(Some(&ai_split));
     let status = gtk::Label::new(Some("Listo"));
+    status.add_css_class("nexuterm-status");
     status.set_xalign(0.0);
     status.set_margin_start(12);
     status.set_margin_top(6);
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        supervised: RefCell::new(None),
+        transfer_queues: RefCell::new(std::collections::HashMap::new()),
+        chat_archives: RefCell::new(Vec::new()),
         session_recovery: RefCell::new(None),
         ai_workspace: RefCell::new(None),
         ai_process: RefCell::new(None),
@@ -324,12 +343,14 @@ pub fn build(app: &gtk::Application) {
         config_writable: warning.is_none(),
         sessions: RefCell::new(Vec::new()),
         ftp_passwords: RefCell::new(std::collections::HashMap::new()),
+        workspace_focus: RefCell::new(glib::WeakRef::new()),
         focused_terminal: RefCell::new(glib::WeakRef::new()),
         documents: RefCell::new(Vec::new()),
         writes: RefCell::new(Vec::new()),
         operations: RefCell::new(Vec::new()),
         desktops: RefCell::new(Vec::new()),
         sftp_masters: RefCell::new(Vec::new()),
+        transfer_tabs: RefCell::new(Vec::new()),
         workspace_placeholders: RefCell::new(Vec::new()),
         workspace_manager: RefCell::new(glib::WeakRef::new()),
         workspace_documents: RefCell::new(Vec::new()),
@@ -388,6 +409,7 @@ pub fn build(app: &gtk::Application) {
     let force = force_close.clone();
     let s = state.clone();
     window.connect_close_request(move |w| {
+        if crate::supervised_ui::closing(&s){s.status.set_text("Cancelando ejecuciones y conservando sus resultados antes de cerrar…");return glib::Propagation::Stop;}
         if s.writes
             .borrow()
             .iter()
@@ -398,7 +420,7 @@ pub fn build(app: &gtk::Application) {
                 .set_text("Espera a que finalicen las escrituras o cancela las transferencias antes de cerrar.");
             return glib::Propagation::Stop;
         }
-        let active = s.ai_process.borrow().as_ref().is_some_and(|p| p.busy()) || s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
+        let active = crate::supervised_ui::busy(&s) || s.ai_process.borrow().as_ref().is_some_and(|p| p.busy()) || s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
             .any(|d| !d.finished.load(std::sync::atomic::Ordering::Relaxed)) || s
             .sessions
             .borrow()
@@ -415,15 +437,20 @@ pub fn build(app: &gtk::Application) {
             let dialog = gtk::AlertDialog::builder()
                 .modal(true)
                 .message("¿Cerrar NexuTerm?")
-                .detail("Se cerrarán las conexiones y agentes de IA activos. Los documentos modificados se conservarán como borradores de recuperación.")
+                .detail("Se cerrarán las conexiones y agentes de IA activos y se cancelarán las ejecuciones supervisadas. Los resultados SSH que no se puedan confirmar quedarán como desconocidos. Los documentos modificados se conservarán como borradores de recuperación.")
                 .buttons(["Cancelar", "Cerrar"])
                 .cancel_button(0)
                 .default_button(0)
                 .build();
             let w = w.clone();
             let force = force.clone();
+            let state=s.clone();
             glib::spawn_future_local(async move {
                 if dialog.choose_future(Some(&w)).await == Ok(1) {
+                    if let Err(error)=crate::supervised_ui::finish_before_close(&state).await{
+                        let warning=gtk::AlertDialog::builder().message("No se confirmó el historial de una ejecución").detail(&error).buttons(["Cancelar cierre","Cerrar sin guardar ese historial"]).cancel_button(0).default_button(0).build();
+                        if warning.choose_future(Some(&w)).await!=Ok(1){return;}
+                    }
                     force.set(true);
                     w.close();
                 }
@@ -487,6 +514,18 @@ pub fn build(app: &gtk::Application) {
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_RECOVERY").is_some() { crate::recovery_ui::smoke_start(&state, &window); }
     #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_SSH").is_some() { workspace_ui::smoke_workspace_ssh(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_EDITOR_BROWSER_VIEWS").is_some() { workspace_ui::smoke_editor_browser_views(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){crate::supervised_ui::smoke(&state);}
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_VISUAL_RESTORE").is_some() { workspace_ui::smoke_visual_restore(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_DESKTOP_RESTORE").is_some() { workspace_ui::smoke_desktop_restore(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_RESTORE").is_some() { workspace_ui::smoke_transfer_restore(&state); }
+    #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_WORKSPACES").is_some() {
         workspace_ui::smoke(&state, &window);
     }
@@ -542,28 +581,21 @@ pub fn build(app: &gtk::Application) {
         && let Ok(port) = std::env::var("NEXUTERM_SMOKE_VNC")
         && let Ok(port) = port.parse::<u16>()
     {
-        connect_profile(
-            &state,
-            &window,
-            &Profile {
-                id: "vnc-loopback-test".into(),
-                name: "VNC integrado — prueba local".into(),
-                protocol: Protocol::Vnc,
-                host: "127.0.0.1".into(),
-                port,
-                ..Profile::default()
-            },
-        );
+        let profile = Profile {
+            id:"vnc-loopback-test".into(),name:"VNC integrado — prueba local".into(),
+            protocol:Protocol::Vnc,host:"127.0.0.1".into(),port,..Profile::default()
+        };
+        if std::env::var_os("NEXUTERM_SMOKE_VNC_WORKSPACE").is_some() {
+            workspace_ui::smoke_desktop_workspace(&state, profile);
+        } else { connect_profile(&state, &window, &profile); }
     }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some()
         && std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
     {
         let lab = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".lab");
-        connect_profile(
-            &state,
-            &window,
-            &Profile {
+        let profile = Profile {
+                id:"rdp-loopback-test".into(),
                 name: "RDP integrado — laboratorio".into(),
                 protocol: Protocol::Rdp,
                 host: "127.0.0.1".into(),
@@ -577,11 +609,12 @@ pub fn build(app: &gtk::Application) {
                     lab.join("rdp-ca.pem").to_string_lossy().into()
                 },
                 ..Profile::default()
-            },
-        );
+            };
+        if std::env::var_os("NEXUTERM_SMOKE_RDP_WORKSPACE").is_some() {workspace_ui::smoke_desktop_workspace(&state,profile);} else {connect_profile(&state,&window,&profile); }
     }
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some()
         && std::env::var_os("NEXUTERM_SMOKE_SSH_LAB").is_some()
+        && std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_SSH").is_none()
     {
         let lab = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".lab");
         connect_profile(
@@ -641,6 +674,31 @@ pub fn build(app: &gtk::Application) {
     // Optional deterministic local UI smoke check, with no network or user-profile writes.
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some() {
         #[cfg(debug_assertions)]
+        if std::env::var_os("NEXUTERM_SMOKE_TABS").is_some() {
+            local_terminal(&state);
+            let bar=tabbar.downgrade();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(700), move || {
+                fn collect(widget:&gtk::Widget, tabs:&mut Vec<gtk::Widget>) {
+                    if widget.css_name().as_str()=="tab" && widget.is_mapped() {tabs.push(widget.clone());}
+                    let mut child=widget.first_child();
+                    while let Some(widget)=child {child=widget.next_sibling();collect(&widget,tabs);}
+                }
+                let bar=bar.upgrade().unwrap();
+                let mut tabs=Vec::new();collect(bar.upcast_ref(),&mut tabs);
+                assert_eq!(tabs.len(),2);
+                let mut bounds:Vec<_>=tabs.iter().map(|tab|tab.compute_bounds(&bar).unwrap()).collect();
+                bounds.sort_by(|a,b|a.x().total_cmp(&b.x()));
+                for rect in &bounds {
+                    assert_eq!(rect.y(),0.0,"Tab background must start at the top of the strip");
+                    assert_eq!(rect.height(),bar.height() as f32,"Tab background must fill the strip height");
+                }
+                assert_eq!(bounds[0].x(),0.0,"First tab must reach the left edge");
+                let last=bounds.last().unwrap();
+                assert_eq!(last.x()+last.width(),bar.width() as f32,"Last tab must reach the right edge");
+                eprintln!("NEXUTERM_SMOKE_TABS_OK width={} height={}",bar.width(),bar.height());
+            });
+        }
+        #[cfg(debug_assertions)]
         if std::env::var_os("NEXUTERM_SMOKE_LOCAL_EXPLORER").is_some() {
             let local = state.local_files.borrow().as_ref().unwrap().widget.downgrade();
             let agents = ai_side.downgrade();
@@ -656,6 +714,16 @@ pub fn build(app: &gtk::Application) {
                 let stage = step.get();
                 let tab_height = tabs.upgrade().unwrap().height();
                 assert!((24..=32).contains(&tab_height), "Tab bar height {tab_height} is not compact");
+                let workspace=split.end_child().unwrap();
+                let pages=workspace.last_child().unwrap();
+                let bounds=pages.compute_bounds(&workspace).unwrap();
+                assert_eq!(bounds.x(),0.0,"Central page must start at the left edge");
+                assert_eq!(bounds.width(),workspace.width() as f32,"Central page must fill the width");
+                assert_eq!(bounds.y()+bounds.height(),workspace.height() as f32,"Central page must reach the bottom edge");
+                let tabs=tabs.upgrade().unwrap().compute_bounds(&workspace).unwrap();
+                assert_eq!(tabs.x(),0.0,"Tabs must start at the left edge");
+                assert_eq!(tabs.width(),workspace.width() as f32,"Tabs must fill the width");
+                assert_eq!(tabs.y()+tabs.height(),bounds.y(),"Tabs and page must meet without a gap");
                 if stage == 0 {
                     eprintln!("NEXUTERM_SMOKE_COMPACT_TABS height={tab_height}");
                     let state = palette_state.upgrade().unwrap();
@@ -756,7 +824,7 @@ pub fn build(app: &gtk::Application) {
         let manager = state.manager.borrow().clone();
         let app = app.downgrade();
         let window = window.downgrade();
-        let duration = if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
+        let duration = if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some() {20} else if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_QUEUE").is_some() {45} else if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
         {
             20
@@ -764,9 +832,13 @@ pub fn build(app: &gtk::Application) {
             10
         } else if std::env::var_os("NEXUTERM_SMOKE_SESSION").is_some() {
             12
+        } else if std::env::var("NEXUTERM_SMOKE_WORKSPACE_CHATS").as_deref()==Ok("history-many") {
+            20
         } else if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_CHATS").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_SSH").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_EDITOR_BROWSER_VIEWS").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_BROWSER_FEATURES").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_FTP_KEYRING").is_some() {
             8
@@ -890,7 +962,9 @@ fn terminal_in_directory(
     focus.connect_enter(move |_| {
         if let Some(s) = s.upgrade() {
             *s.focused_terminal.borrow_mut() = t.clone();
+            if let Some(term)=t.upgrade() {*s.workspace_focus.borrow_mut()=term.upcast_ref::<gtk::Widget>().downgrade();}
             if let Some(term) = t.upgrade() { sync_local_directory(&s, &term); }
+            update_sidebar(&s);
             actions::update_actions(&s);
         }
     });
@@ -925,6 +999,7 @@ fn terminal_in_directory(
         glib::Propagation::Proceed
     });
     term.add_controller(keys);
+    crate::context_menu::terminal(&term);
     let page = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     page.add_css_class("nexuterm-terminal");
     page.set_overflow(gtk::Overflow::Hidden);
@@ -1056,69 +1131,48 @@ fn terminal_in_directory(
 }
 
 fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: &Profile) {
-    if matches!(profile.protocol, Protocol::Vnc | Protocol::Rdp) {
-        if let Err(error) = connection::validate(profile) {
-            state.status.set_text(&error);
-            return;
-        }
-        crate::desktop_view::show(state, profile);
-        return;
+    connect_profile_at(state, window, profile, None, None, None);
+}
+
+fn finish_transfer_tab(
+    state: &State,
+    widget: &gtk::Box,
+    profile: &Profile,
+    remote: &Rc<crate::remote_panel::Panel>,
+    replacement: Option<&gtk::Box>,
+) {
+    remote.bind_queue(profile);
+    state
+        .transfer_tabs
+        .borrow_mut()
+        .retain(|(w, _, _, _)| w.upgrade().is_some());
+    state.transfer_tabs.borrow_mut().push((
+        widget.upcast_ref::<gtk::Widget>().downgrade(),
+        profile.id.clone(),
+        profile.protocol,
+        Rc::downgrade(remote),
+    ));
+    if let Some(old) = replacement { replace_workspace_tab(state, widget, old); }
+    update_sidebar(state);
+}
+
+fn replace_workspace_tab(state: &State, widget: &gtk::Box, old: &gtk::Box) {
+    let old_page = (0..state.notebook.n_pages())
+        .map(|i| state.notebook.nth_page(i))
+        .find(|p| p.child() == *old.upcast_ref::<gtk::Widget>());
+    if let Some(old_page) = old_page {
+        let new_page = state.notebook.page(widget);
+        let position = state.notebook.page_position(&old_page);
+        state.notebook.reorder_page(&new_page, position);
+        state.notebook.close_page(&old_page);
     }
-    if profile.protocol == Protocol::Ftp {
-        let profile = profile.clone();
-        let state = state.clone();
-        glib::spawn_future_local(async move {
-            let cached = state
-                .ftp_passwords
-                .borrow()
-                .get(&crate::ftp::key(&profile))
-                .cloned();
-            let password = match cached {
-                Some(password) => Ok(Some(password)),
-                None => crate::ftp::lookup(&profile).await,
-            };
-            match password {
-                Ok(Some(password)) => {
-                    let Some(window) = state.window.upgrade() else {
-                        return;
-                    };
-                    let client = crate::ftp_transfer::start(&state, profile.clone(), password);
-                    let remote = crate::remote_panel::Panel::with_client(&state, &window, client);
-                    let (workspace, local) = crate::file_browser::workspace(&state, &remote);
-                    append_tab(&state.notebook, &workspace, &profile.name, move || {
-                        remote.stop();
-                        local.stop();
-                    });
-                }
-                Ok(None) => state
-                    .status
-                    .set_text("Configura el usuario y la contraseña FTP antes de conectar."),
-                Err(error) => state.status.set_text(&error),
-            }
-        });
-        return;
-    }
-    if profile.protocol == Protocol::Telnet {
-        match connection::command(profile) {
-            Ok(spec) => terminal(state, &profile.name, spec),
-            Err(error) => state.status.set_text(&error),
-        }
-        return;
-    }
-    let connection = match nexuterm::ssh::SshConnection::new(profile.clone()) {
-        Ok(c) => c,
-        Err(e) => {
-            state.status.set_text(&e);
-            return;
-        }
-    };
-    let mut spec = match connection.terminal_command() {
-        Ok(spec) => spec,
-        Err(e) => {
-            state.status.set_text(&e);
-            return;
-        }
-    };
+}
+
+fn ssh_terminal_command(
+    connection: &nexuterm::ssh::SshConnection,
+) -> Result<connection::CommandSpec, String> {
+    let profile = &connection.profile;
+    let mut spec = connection.terminal_command()?;
     if std::env::var_os("NEXUTERM_SMOKE_TEST").is_some()
         && std::env::var_os("NEXUTERM_SMOKE_SSH_LAB").is_some()
         && profile.id == "nexuterm-smoke-lab"
@@ -1158,14 +1212,102 @@ fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: 
         }
     }
     #[cfg(debug_assertions)]
-    if profile.id == "remote-editor-fixture" && (std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some() || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()) {
+    if profile.id == "remote-editor-fixture"
+        && (std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some())
+    {
         let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
-        spec.args.splice(0..0, ["-F".into(), "/dev/null".into(), "-o".into(),
-            format!("UserKnownHostsFile={}", root.join("known_hosts").display()),
-            "-o".into(), "StrictHostKeyChecking=yes".into(), "-o".into(), "BatchMode=yes".into(),
-            "-o".into(), "IdentitiesOnly=yes".into()]);
+        spec.args.splice(
+            0..0,
+            [
+                "-F".into(),
+                "/dev/null".into(),
+                "-o".into(),
+                format!("UserKnownHostsFile={}", root.join("known_hosts").display()),
+                "-o".into(),
+                "StrictHostKeyChecking=yes".into(),
+                "-o".into(),
+                "BatchMode=yes".into(),
+                "-o".into(),
+                "IdentitiesOnly=yes".into(),
+            ],
+        );
         spec.args.push("/bin/sleep 30".into());
     }
+    Ok(spec)
+}
+
+fn connect_profile_at(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: &Profile,
+    directory: Option<PathBuf>, view:Option<nexuterm::workspaces::BrowserView>, replacement: Option<gtk::Box>) {
+    if let Err(error)=connection::validate(profile){state.status.set_text(&error);return;}
+    if matches!(profile.protocol, Protocol::Vnc | Protocol::Rdp) {
+        let widget = crate::desktop_view::show(state, profile);
+        if let Some(old) = replacement.as_ref() { replace_workspace_tab(state, &widget, old); }
+        return;
+    }
+    if profile.protocol == Protocol::Ftp {
+        if let Some(root) = &replacement { root.set_sensitive(false); }
+        let profile = profile.clone();
+        let state = state.clone();
+        glib::spawn_future_local(async move {
+            let cached = state
+                .ftp_passwords
+                .borrow()
+                .get(&crate::ftp::key(&profile))
+                .cloned();
+            let password = match cached {
+                Some(password) => Ok(Some(password)),
+                None => crate::ftp::lookup(&profile).await,
+            };
+            if let Some(root) = &replacement {
+                // Closing the recovered tab while looking up credentials cancels the request.
+                if !(0..state.notebook.n_pages()).any(|i|state.notebook.nth_page(i).child() == *root.upcast_ref::<gtk::Widget>()) {return;}
+                root.set_sensitive(true);
+            }
+            match password {
+                Ok(Some(password)) => {
+                    let Some(window) = state.window.upgrade() else {
+                        return;
+                    };
+                    let client = crate::ftp_transfer::start(&state, profile.clone(), password);
+                    let remote = crate::remote_panel::Panel::with_client_directory(&state, &window, client, directory.unwrap_or_else(||PathBuf::from(".")));
+                    if let Some(view)=view {remote.restore_workspace_view(view);}
+                    let workspace = crate::file_browser::workspace(&state, &remote);
+                    let close_remote = remote.clone();
+                    append_tab(&state.notebook, &workspace, &profile.name, move || {
+                        close_remote.stop();
+                    });
+                    finish_transfer_tab(&state, &workspace, &profile, &remote, replacement.as_ref());
+                }
+                Ok(None) => state
+                    .status
+                    .set_text("Configura el usuario y la contraseña FTP antes de conectar."),
+                Err(error) => state.status.set_text(&error),
+            }
+        });
+        return;
+    }
+    if profile.protocol == Protocol::Telnet {
+        match connection::command(profile) {
+            Ok(spec) => terminal(state, &profile.name, spec),
+            Err(error) => state.status.set_text(&error),
+        }
+        return;
+    }
+    let connection = match nexuterm::ssh::SshConnection::new(profile.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            state.status.set_text(&e);
+            return;
+        }
+    };
+    let spec = match ssh_terminal_command(&connection) {
+        Ok(spec) => spec,
+        Err(e) => {
+            state.status.set_text(&e);
+            return;
+        }
+    };
     if profile.protocol == Protocol::Sftp {
         let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
         let status = gtk::Label::new(Some(
@@ -1175,15 +1317,17 @@ fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: 
         status.set_wrap(true);
         page.append(&status);
         let master = crate::sftp_session::Master::start(state, connection.clone(), spec, &status);
-        let remote = crate::remote_panel::Panel::new(state, window, connection);
+        let remote = crate::remote_panel::Panel::new_in_directory(state, window, connection, directory.unwrap_or_else(||PathBuf::from(".")));
+        if let Some(view)=view {remote.restore_workspace_view(view);}
         remote.hide_auth_when_ready(status.upcast_ref());
-        let (workspace, local) = crate::file_browser::workspace(state, &remote);
+        let workspace = crate::file_browser::workspace(state, &remote);
         page.append(&workspace);
+        let close_remote = remote.clone();
         append_tab(&state.notebook, &page, &profile.name, move || {
-            remote.stop();
-            local.stop();
+            close_remote.stop();
             master.close();
         });
+        finish_transfer_tab(state, &page, profile, &remote, replacement.as_ref());
         return;
     }
     let page = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1236,7 +1380,17 @@ fn connect_profile(state: &Rc<State>, window: &gtk::ApplicationWindow, profile: 
 }
 
 fn update_sidebar(state: &State) {
-    let panel = state.notebook.selected_page().and_then(|selected| {
+    if let Some(local) = state.local_files.borrow().as_ref() {
+        let selected = state.notebook.selected_page();
+        let remote = state.remote_browsers.borrow().iter().filter_map(Weak::upgrade)
+            .find(|remote| selected.as_ref().is_some_and(|page|
+                page.child() == remote.widget.clone().upcast::<gtk::Widget>()
+                    || remote.widget.is_ancestor(&page.child())));
+        local.bind_remote(remote.as_ref());
+    }
+    let focused_panel=state.focused_terminal.borrow().upgrade().filter(|term|state.notebook.selected_page().is_some_and(|page|term.is_ancestor(&page.child())))
+        .and_then(|term|workspace_ui::panel_for_terminal(state,term.upcast_ref())).map(|p|p.widget.clone());
+    let panel = focused_panel.or_else(|| state.notebook.selected_page().and_then(|selected| {
         state
             .remote_panels
             .borrow()
@@ -1246,7 +1400,7 @@ fn update_sidebar(state: &State) {
                     .then(|| panel.upgrade())
                     .flatten()
             })
-    });
+    }));
     if let Some(panel) = panel {
         state.sidebar_stack.set_visible_child(&panel);
     } else if let Some(local) = state.local_files.borrow().as_ref() {
@@ -1341,6 +1495,12 @@ fn entry(grid: &gtk::Grid, row: i32, label: &str, value: &str) -> gtk::Entry {
 
 #[cfg(debug_assertions)]
 fn smoke_ftp_configuration(state: &Rc<State>, window: &gtk::ApplicationWindow, port: u16) {
+    if std::env::var("NEXUTERM_SMOKE_TRANSFER_QUEUE").as_deref()==Ok("recover") {
+        let profile=state.config.borrow().profiles.iter().find(|p|p.protocol==Protocol::Ftp && p.host=="127.0.0.1" && p.port==port).cloned().unwrap();
+        state.ftp_passwords.borrow_mut().insert(crate::ftp::key(&profile),zeroize::Zeroizing::new("test only\"\\fixture".into()));
+        connect_profile(state,window,&profile);return;
+    }
+
     profile_dialog(state, window, None);
     let dialog = gtk::Window::list_toplevels()
         .into_iter()
@@ -1362,7 +1522,7 @@ fn smoke_ftp_configuration(state: &Rc<State>, window: &gtk::ApplicationWindow, p
         (0, "FTP configurado".to_string()),
         (2, "127.0.0.1".into()),
         (3, port.to_string()),
-        (4, "demo".into()),
+        (4, std::env::var("NEXUTERM_SMOKE_FTP_USER").unwrap_or_else(|_|"demo".into())),
     ] {
         grid.child_at(1, row)
             .unwrap()
@@ -1401,7 +1561,7 @@ fn smoke_ftp_configuration(state: &Rc<State>, window: &gtk::ApplicationWindow, p
             return glib::ControlFlow::Continue;
         }
         let profile = state.config.borrow().profiles.last().unwrap().clone();
-        assert_eq!(profile.username, "demo");
+        assert_eq!(profile.username, std::env::var("NEXUTERM_SMOKE_FTP_USER").unwrap_or_else(|_|"demo".into()));
         assert_eq!(profile.secret_ref.is_some(), remember);
         assert!(
             !std::fs::read_to_string(&state.path)
@@ -1546,7 +1706,6 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
         .transient_for(window)
         .modal(true)
         .title("Conexión remota")
-        .default_width(520)
         .build();
     let grid = gtk::Grid::builder()
         .row_spacing(8)
@@ -1637,6 +1796,7 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
     let kind = protocol.downgrade();
     let toggle = vnc_user.downgrade();
     let notice = err.downgrade();
+    let window = dialog.downgrade();
     let update_fields = Rc::new(move || {
         let (Some(grid), Some(protocol), Some(toggle)) =
             (form.upgrade(), kind.upgrade(), toggle.upgrade())
@@ -1668,6 +1828,9 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
             }
         }
         toggle.set_visible(selected == 2);
+        if let Some(window) = window.upgrade() {
+            window.set_default_size(520, -1);
+        }
     });
     update_fields();
     let update = update_fields.clone();
@@ -1877,6 +2040,11 @@ fn agent_workspace(state: &State) -> Option<AgentWorkspace> {
 }
 
 fn sync_local_directory(state: &State, term: &vte4::Terminal) {
+    // A terminal retained as "focused" must not move the transfer destination
+    // while an FTP/SFTP tab (or another document) is selected.
+    if !state.notebook.selected_page().is_some_and(|page| term.is_ancestor(&page.child())) {
+        return;
+    }
     let local = state
         .sessions
         .borrow()

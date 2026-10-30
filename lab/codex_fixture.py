@@ -42,7 +42,10 @@ for line in sys.stdin:
     elif method == 'model/list':
         result = dict(data=[dict(id='fixture', model='fixture-model', displayName='Modelo de prueba', supportedReasoningEfforts=[dict(reasoningEffort='low', description='Ligero'),dict(reasoningEffort='high', description='Alto')])])
     elif method == 'thread/list':
-        result = dict(data=[dict(id='old-thread', name='Chat anterior de prueba', preview='Consulta anterior')])
+        if params.get('cursor') == 'cursor-2':
+            result = dict(data=[dict(id='older-thread', name='Chat más antiguo', preview='Consulta guardada', cwd=str(Path.cwd()))])
+        else:
+            result = dict(data=[dict(id='old-thread', name='Chat anterior de prueba', preview='Consulta anterior', cwd=str(Path.cwd()))], nextCursor='cursor-2')
     elif method == 'thread/resume':
         result = dict(thread=dict(id='fixture-thread', turns=[dict(items=[dict(type='userMessage', content=[dict(type='text', text='Consulta anterior')]),dict(type='agentMessage', text='Respuesta anterior')])]))
     elif method == 'thread/start':

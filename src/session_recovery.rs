@@ -233,6 +233,7 @@ mod tests {
             selected: 0,
             directory: None,
             sidebar_visible: true,
+            browser: None,
             chats: Default::default(),
         }
     }

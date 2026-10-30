@@ -28,10 +28,13 @@ pub enum Event {
         history: bool,
         reasoning: bool,
     },
-    History(Vec<Value>),
+    History(Vec<Value>, Option<String>),
+    HistoryFailed(String),
     Models(Vec<Value>),
     Resumed(Value),
     Session(String),
+    Continuation(crate::chat_state::Continuation),
+    Continued,
     Status(String),
     Delta {
         item: String,
@@ -52,7 +55,9 @@ pub enum Event {
 pub(crate) enum Command {
     Credentials(Result<zeroize::Zeroizing<String>, String>),
     Send(String, String, String, Option<String>),
-    Resume(String),
+    Resume(String, Option<String>),
+    History(String),
+    Restore(crate::chat_state::Continuation),
     Permissions(bool),
     Login,
     Logout,
@@ -67,12 +72,16 @@ pub struct Client {
 }
 impl Client {
     pub fn start(agent: AiAgent, writable: bool) -> (Self, mpsc::Receiver<Event>) {
+        Self::start_mode(agent,writable,false)
+    }
+    pub fn start_recovery(agent:AiAgent,writable:bool)->(Self,mpsc::Receiver<Event>){Self::start_mode(agent,writable,true)}
+    fn start_mode(agent: AiAgent, writable: bool, restoring:bool) -> (Self, mpsc::Receiver<Event>) {
         let (commands, rx) = mpsc::channel(32);
         let (events, out) = mpsc::channel(32);
         let busy = Arc::new(AtomicBool::new(true));
         let working = busy.clone();
         let task = crate::runtime::runtime().spawn(async move {
-            let result=if agent.is_codex(){run(agent,writable,rx,events.clone(),working.clone()).await}else{crate::agent_runtime::run(agent,writable,rx,events.clone(),working.clone()).await};
+            let result=if agent.is_codex(){run(agent,writable,rx,events.clone(),working.clone()).await}else{crate::agent_runtime::run(agent,writable,rx,events.clone(),working.clone(),restoring).await};
             if result.is_err() {
                 let _ = events.send(Event::Error("Se perdió la conexión con el agente. Abre una nueva conversación para reconectar.".into())).await;
             }
@@ -126,15 +135,25 @@ impl Client {
             self.close();
         }
     }
+    pub fn restore(&self,state:crate::chat_state::Continuation)->bool {
+        if self.busy.swap(true,Ordering::Relaxed){return false;}
+        if self.commands.try_send(Command::Restore(state)).is_err(){self.busy.store(false,Ordering::Relaxed);return false;}true
+    }
     pub fn resume(&self, id: String) -> bool {
+        self.resume_in_directory(id, None)
+    }
+    pub fn resume_in_directory(&self, id: String, directory: Option<String>) -> bool {
         if self.busy.swap(true, Ordering::Relaxed) {
             return false;
         }
-        if self.commands.try_send(Command::Resume(id)).is_err() {
+        if self.commands.try_send(Command::Resume(id, directory)).is_err() {
             self.busy.store(false, Ordering::Relaxed);
             return false;
         }
         true
+    }
+    pub fn history(&self, cursor: String) -> bool {
+        self.commands.try_send(Command::History(cursor)).is_ok()
     }
     pub fn logout(&self) -> bool {
         if self.busy.swap(true, Ordering::Relaxed) { return false; }
@@ -347,9 +366,27 @@ async fn run(
                     } else if !pending.values().any(|m|matches!(m.as_str(),"thread/start"|"turn/start"|"account/login/start")) { busy.store(false, Ordering::Relaxed); }
                 }
                 Some(Command::Permissions(value)) => { if thread.is_empty() { writable=value; } }
-                Some(Command::Resume(id)) => {
+                Some(Command::Restore(_)) => {busy.store(false,Ordering::Relaxed);events.send(Event::Error("Este perfil requiere una referencia nativa de Codex".into())).await.map_err(|_|())?;}
+                Some(Command::Resume(id, saved_directory)) => {
                     if !authenticated || !initialized { busy.store(false, Ordering::Relaxed); continue; }
+                    if let Some(saved_directory) = saved_directory {
+                        if !std::path::Path::new(&saved_directory).is_absolute()
+                            || !std::path::Path::new(&saved_directory).is_dir()
+                        {
+                            busy.store(false, Ordering::Relaxed);
+                            events.send(Event::Error("La carpeta guardada para este chat ya no está disponible.".into())).await.map_err(|_| ())?;
+                            continue;
+                        }
+                        directory = saved_directory;
+                    }
                     request(&mut input, &mut pending, &mut seq, "thread/resume", json!({"threadId":id,"cwd":directory,"approvalPolicy":"untrusted","sandbox":if writable {"workspace-write"} else {"read-only"}})).await?;
+                }
+                Some(Command::History(cursor)) => {
+                    if !authenticated || !initialized {
+                        events.send(Event::HistoryFailed("Inicia sesión para consultar los chats guardados.".into())).await.map_err(|_| ())?;
+                        continue;
+                    }
+                    request(&mut input, &mut pending, &mut seq, "thread/list", json!({"limit":100,"cursor":cursor,"sortKey":"updated_at"})).await?;
                 }
                 Some(Command::Send(text, model, effort, cwd)) => {
                     if let Some(cwd) = cwd {
@@ -369,7 +406,7 @@ async fn run(
                         queued = Some(text);
                         let mut params = json!({"cwd":directory,"approvalPolicy":"untrusted","sandbox":if writable {"workspace-write"} else {"read-only"}});
                         if !agent.model.is_empty() { params["model"]=json!(agent.model); }
-                        if !agent.system_prompt.is_empty() { params["developerInstructions"]=json!(agent.system_prompt); }
+                        params["developerInstructions"]=json!(crate::ai::system_instructions(&agent));
                         request(&mut input,&mut pending,&mut seq,"thread/start",params).await?;
                     } else { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; }
                 }
@@ -427,7 +464,8 @@ async fn run(
                 let Some(method)=pending.remove(&id) else { continue; };
                 if frame.get("error").is_some() {
                     if method == "account/rateLimits/read" { events.send(Event::RateLimits(Value::Null)).await.map_err(|_|())?; continue; }
-                    if matches!(method.as_str(),"model/list"|"thread/list") { events.send(Event::Status(format!("No se pudo consultar {}.",method))).await.map_err(|_|())?; continue; }
+                    if method == "thread/list" { events.send(Event::HistoryFailed("No se pudo consultar el historial de Codex.".into())).await.map_err(|_|())?; continue; }
+                    if method == "model/list" { events.send(Event::Status(format!("No se pudo consultar {}.",method))).await.map_err(|_|())?; continue; }
                     busy.store(false,Ordering::Relaxed); queued=None;
                     events.send(Event::Error(format!("Codex rechazó {method} (código {}). Revisa modelo, cuenta y configuración.",frame["error"]["code"])) ).await.map_err(|_| ())?;
                     if method == "initialize" { return Err(()); }
@@ -458,7 +496,7 @@ async fn run(
                         events.send(Event::Account(result["account"]["email"].as_str().map(String::from))).await.map_err(|_|())?;
                         if chatgpt { request(&mut input,&mut pending,&mut seq,"account/rateLimits/read",json!({})).await?; }
                         events.send(Event::Ready(authenticated)).await.map_err(|_| ())?;
-                        request(&mut input, &mut pending, &mut seq, "thread/list", json!({"limit":12,"cwd":directory,"sortKey":"updated_at"})).await?;
+                        request(&mut input, &mut pending, &mut seq, "thread/list", json!({"limit":100,"sortKey":"updated_at"})).await?;
                         request(&mut input, &mut pending, &mut seq, "model/list", json!({})).await?;
                         if want_login {
                             if chatgpt {
@@ -481,7 +519,10 @@ async fn run(
                         events.send(Event::Models(result["data"].as_array().cloned().unwrap_or_default())).await.map_err(|_| ())?;
                     }
                     "thread/list" => {
-                        events.send(Event::History(result["data"].as_array().cloned().unwrap_or_default())).await.map_err(|_| ())?;
+                        events.send(Event::History(
+                            result["data"].as_array().cloned().unwrap_or_default(),
+                            result["nextCursor"].as_str().filter(|cursor| !cursor.is_empty()).map(str::to_owned),
+                        )).await.map_err(|_| ())?;
                     }
                     "thread/resume" => {
                         thread=result["thread"]["id"].as_str().ok_or(())?.into();

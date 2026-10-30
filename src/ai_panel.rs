@@ -42,25 +42,176 @@ pub(super) struct WorkspaceChats {
     pub restore: Rc<dyn Fn(&nexuterm::workspaces::Chats) -> Result<(), String>>,
 }
 struct Conversation {
-    id: String,
+    id: RefCell<String>,
     page: gtk::Box,
-    chat: super::codex_chat::Chat,
+    chat: RefCell<super::codex_chat::Chat>,
     process: Rc<Process>,
     label: gtk::Label,
     agent_id: RefCell<Option<String>>,
+    recent_wait: Cell<bool>,
 }
-fn conversation(state: &Rc<State>, process: Rc<Process>) -> Rc<Conversation> {
-    let chat = super::codex_chat::build(state, &process);
+impl Conversation {
+    fn chat(&self) -> super::codex_chat::Chat {
+        self.chat.borrow().clone()
+    }
+}
+fn wire_recent(state: &Rc<State>, c: &Rc<Conversation>) {
+    let weak = Rc::downgrade(c);
+    let state = Rc::downgrade(state);
+    *c.chat().select_recent.borrow_mut() = Some(Rc::new(move |id| {
+        let (Some(state), Some(c)) = (state.upgrade(), weak.upgrade()) else {
+            return;
+        };
+        if !c.page.is_sensitive() {
+            return;
+        }
+        c.page.set_sensitive(false);
+        let expected = c.id.borrow().clone();
+        glib::spawn_future_local(async move {
+            let result = nexuterm::runtime::runtime()
+                .spawn_blocking(move || {
+                    nexuterm::chat_history::load_recent(&nexuterm::chat_history::directory()?, &id)
+                })
+                .await;
+            c.page.set_sensitive(true);
+            if *c.id.borrow() != expected || c.page.root().is_none() {
+                return;
+            }
+            match result.unwrap_or_else(|e| Err(e.to_string())) {
+                Ok(saved) if saved.agent_id == *c.agent_id.borrow() => {
+                    replace_conversation(&state, &c, Some(saved), None)
+                }
+                Ok(_) => (),
+                Err(error) => {
+                    let dialog = gtk::AlertDialog::builder()
+                        .message("No se pudo abrir el chat")
+                        .detail(&error)
+                        .build();
+                    dialog.show(state.window().as_ref());
+                }
+            }
+        });
+    }));
+}
+fn replace_conversation(
+    state: &Rc<State>,
+    c: &Rc<Conversation>,
+    saved: Option<nexuterm::workspaces::Chat>,
+    agent_override: Option<AiAgent>,
+) {
+    if !c.page.is_sensitive() {
+        return;
+    }
+    let current = (c.chat().snapshot)();
+    let agent_id = saved
+        .as_ref()
+        .and_then(|s| s.agent_id.clone())
+        .or_else(|| c.agent_id.borrow().clone());
+    let preserve_model = agent_override.is_none() && saved.is_none();
+    let agent = agent_override.or_else(|| {
+        state
+            .config
+            .borrow()
+            .ai_agents
+            .iter()
+            .find(|a| Some(&a.id) == agent_id.as_ref())
+            .cloned()
+    });
+    let Some(mut agent) = agent else {
+        (c.chat().show_recent)();
+        return;
+    };
+    if preserve_model && !current.model.is_empty() {
+        agent.model = current.model.clone();
+    }
+    c.page.set_sensitive(false);
+    let pending = nexuterm::chat_history::RecentSave::new(current);
+    let old_id = c.id.borrow().clone();
+    let state = Rc::downgrade(state);
+    let c = Rc::downgrade(c);
+    glib::spawn_future_local(async move {
+        let result = nexuterm::runtime::runtime()
+            .spawn_blocking(move || pending.save(&nexuterm::chat_history::directory()?))
+            .await;
+        let (Some(state), Some(c)) = (state.upgrade(), c.upgrade()) else {
+            return;
+        };
+        c.page.set_sensitive(true);
+        if *c.id.borrow() != old_id || c.page.root().is_none() {
+            return;
+        }
+        if let Err(error) = result.unwrap_or_else(|e| Err(e.to_string())) {
+            let dialog = gtk::AlertDialog::builder()
+                .message("No se pudo conservar el chat actual")
+                .detail(&error)
+                .build();
+            dialog.show(state.window().as_ref());
+            return;
+        }
+        let old = c.chat();
+        (old.close)();
+        c.page.remove(&old.widget);
+        let id = saved
+            .as_ref()
+            .map(|s| s.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let chat = super::codex_chat::build(&state, &c.process, &id);
+        *c.id.borrow_mut() = id;
+        c.recent_wait.set(false);
+        *c.chat.borrow_mut() = chat.clone();
+        c.page.append(&chat.widget);
+        wire_recent(&state, &c);
+        c.label.set_text(&agent.name);
+        *c.agent_id.borrow_mut() = Some(agent.id.clone());
+        let login_open = chat.open.clone();
+        let login_agent = agent.clone();
+        chat.login
+            .connect_clicked(move |_| login_open(login_agent.clone(), true));
+        if let Some(saved) = saved {
+            (chat.restore)(&saved);
+            // Choosing a recent conversation explicitly requests its continuation.
+            (chat.activate)();
+        } else {
+            (chat.open)(agent, false);
+        }
+    });
+}
+
+
+fn show_recent(state:&Rc<State>,c:&Rc<Conversation>){
+    if !c.process.current_busy(){replace_conversation(state,c,None,None);return;}
+    // Browsing recents must not cancel a response already in progress.
+    (c.chat().show_recent)();
+    if c.recent_wait.replace(true){return;}
+    let state=Rc::downgrade(state);let weak=Rc::downgrade(c);let id=c.id.borrow().clone();let settled=Cell::new(false);
+    glib::timeout_add_local(std::time::Duration::from_millis(35),move ||{
+        let (Some(state),Some(c))=(state.upgrade(),weak.upgrade()) else{return glib::ControlFlow::Break;};
+        if *c.id.borrow()!=id || c.page.root().is_none(){return glib::ControlFlow::Break;}
+        if c.process.current_busy(){settled.set(false);return glib::ControlFlow::Continue;}
+        // Allow the event reader to consume the final text and continuation.
+        if !settled.replace(true){return glib::ControlFlow::Continue;}
+        c.recent_wait.set(false);
+        replace_conversation(&state,&c,None,None);
+        glib::ControlFlow::Break
+    });
+}
+
+fn conversation(state: &Rc<State>, process: Rc<Process>, identifier:Option<&str>) -> Rc<Conversation> {
+    let id=identifier.map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().to_string());
+    let chat = super::codex_chat::build(state, &process,&id);
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     page.append(&chat.widget);
-    Rc::new(Conversation {
-        id: uuid::Uuid::new_v4().to_string(),
+    let c=Rc::new(Conversation {
+        id: RefCell::new(id),
         page,
-        chat,
+        chat: RefCell::new(chat),
         process,
         label: gtk::Label::new(Some("Nuevo chat")),
         agent_id: RefCell::new(None),
-    })
+        recent_wait: Cell::new(false),
+    });
+    wire_recent(state, &c);
+    c
 }
 
 pub(super) fn install(
@@ -73,9 +224,9 @@ pub(super) fn install(
     for class in ["ai-panel", "nexuterm-section", "nexuterm-panel"] {
         side.add_css_class(class);
     }
-    side.set_margin_top(2);
+    side.set_margin_top(0);
     side.set_margin_end(0);
-    side.set_margin_bottom(8);
+    side.set_margin_bottom(0);
     let heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let title = gtk::Label::new(Some("Chat"));
     title.add_css_class("heading");
@@ -128,8 +279,11 @@ pub(super) fn install(
     heading.append(&selector);
     let history = icon_button(
         "document-open-recent-symbolic",
-        "Mostrar u ocultar chats recientes",
+        "Mostrar chats recientes",
     );
+    let local_history=icon_button("document-open-symbolic","Historial local completo");
+    local_history.set_widget_name("ai-local-history");
+    heading.append(&local_history);
     let start = icon_button("list-add-symbolic", "Nuevo chat con otro modelo o agente");
     start.set_widget_name("ai-new-chat");
     let stop = icon_button("media-playback-stop-symbolic", "Detener respuesta");
@@ -157,16 +311,18 @@ pub(super) fn install(
     notebook.set_scrollable(true);
     notebook.set_show_border(false);
     notebook.set_vexpand(true);
-    let initial = conversation(state, process.clone());
+    let initial = conversation(state, process.clone(),None);
     notebook.append_page(&initial.page, Some(&initial.label));
     let active = Rc::new(RefCell::new(initial.clone()));
     let conversations = Rc::new(RefCell::new(vec![initial.clone()]));
-    let login = initial.chat.login.clone();
+    let login = initial.chat().login.clone();
     side.append(&notebook);
-    let current = active.clone();
+    let local_active=active.clone();let local_state=Rc::downgrade(state);
+    local_history.connect_clicked(move |_|{if let Some(state)=local_state.upgrade(){crate::chat_history_ui::show(&state,&local_active.borrow().chat().archive);}});
+    history.set_widget_name("ai-show-recent");
+    let current = active.clone(); let recent_state=Rc::downgrade(state);
     history.connect_clicked(move |_| {
-        let history = current.borrow().chat.history.clone();
-        history.set_visible(!history.is_visible());
+        if let Some(state)=recent_state.upgrade(){show_recent(&state,&current.borrow().clone());}
     });
     let refreshing = Rc::new(Cell::new(false));
     let known = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -281,11 +437,16 @@ pub(super) fn install(
                 info.set_text(&error);
                 return;
             }
+            let previous=(current.chat().snapshot)();
+            if !login && (!previous.messages.is_empty() || !previous.draft.is_empty()) {
+                replace_conversation(&s,&current,None,Some(agent));
+                return;
+            }
             last.set(selector.selected());
             info.set_visible(false);
             current.label.set_text(&agent.name);
             *current.agent_id.borrow_mut() = Some(agent.id.clone());
-            (current.chat.open)(agent, login);
+            (current.chat().open)(agent, login);
         })
     };
     let action = gio::SimpleAction::new("ai-agents", None);
@@ -421,7 +582,7 @@ pub(super) fn install(
                             .filter(|c| c.agent_id.borrow().as_ref() == Some(&a.id))
                         {
                             for model in chat
-                                .chat
+                                .chat()
                                 .models
                                 .borrow()
                                 .iter()
@@ -506,7 +667,7 @@ pub(super) fn install(
                 native: RefCell::new(None),
                 children: RefCell::new(Vec::new()),
             });
-            let chat = conversation(&state, process.clone());
+            let chat = conversation(&state, process.clone(),None);
             chat.label
                 .set_text(&if agent.model.is_empty() || agent.name == agent.model {
                     agent.name.clone()
@@ -523,10 +684,10 @@ pub(super) fn install(
             let chats_close = chats.clone();
             let root_close = root.clone();
             let p = process.clone();
-            let cleanup = chat.chat.close.clone();
+            let cleanup = Rc::downgrade(&chat);
             close.connect_clicked(move |_| {
                 if let (Some(n), Some(page)) = (n.upgrade(), page.upgrade()) {
-                    cleanup();
+                    if let Some(c)=cleanup.upgrade(){(c.chat().close)();}
                     p.shutdown();
                     chats_close.borrow_mut().retain(|c| c.page != page);
                     root_close
@@ -539,13 +700,13 @@ pub(super) fn install(
                 }
             });
             let go = go.clone();
-            chat.chat.login.connect_clicked(move |_| go(true));
+            chat.chat().login.connect_clicked(move |_| go(true));
             root.children.borrow_mut().push(process);
             chats.borrow_mut().push(chat.clone());
             notebook.append_page(&chat.page, Some(&label));
             *current.borrow_mut() = chat.clone();
             notebook.set_current_page(notebook.page_num(&chat.page));
-            (chat.chat.open)(agent, false);
+            (chat.chat().open)(agent, false);
             dialog.close();
         });
         dialog.set_child(Some(&content));
@@ -689,7 +850,7 @@ pub(super) fn install(
             let mut tabs = Vec::new();
             let mut selected = 0;
             for c in chats.borrow().iter() {
-                let mut saved = (c.chat.snapshot)();
+                let mut saved = (c.chat().snapshot)();
                 if saved.agent_id.is_none() && saved.messages.is_empty() && saved.draft.is_empty() {
                     continue;
                 }
@@ -698,8 +859,8 @@ pub(super) fn install(
                 {
                     selected = tabs.len();
                 }
-                saved.id = c.id.clone();
-                saved.title = c.label.text().to_string();
+                saved.id = c.id.borrow().clone();
+                if saved.title.is_empty(){saved.title = c.label.text().to_string();}
                 tabs.push(saved);
             }
             nexuterm::workspaces::Chats {
@@ -726,13 +887,13 @@ pub(super) fn install(
             let missing = saved
                 .tabs
                 .iter()
-                .filter(|t| !existing.iter().any(|c| c.id == t.id))
+                .filter(|t| !existing.iter().any(|c| *c.id.borrow() == t.id))
                 .count();
             let empty: Vec<_> = existing
                 .iter()
                 .filter(|c| {
-                    let t = (c.chat.snapshot)();
-                    !saved.tabs.iter().any(|tab| tab.id == c.id)
+                    let t = (c.chat().snapshot)();
+                    !saved.tabs.iter().any(|tab| tab.id == *c.id.borrow())
                         && t.agent_id.is_none() && t.messages.is_empty() && t.draft.is_empty()
                 })
                 .cloned()
@@ -744,15 +905,16 @@ pub(super) fn install(
             if !saved.tabs.is_empty() {
                 first.set(false);
                 for c in empty {
+                    (c.chat().close)();
                     if let Some(index) = n.page_num(&c.page) {
                         n.remove_page(Some(index));
                     }
-                    chats.borrow_mut().retain(|v| v.id != c.id);
+                    chats.borrow_mut().retain(|v| *v.id.borrow() != *c.id.borrow());
                 }
             }
             let mut selection = None;
             for (index, tab) in saved.tabs.iter().enumerate() {
-                let existing = chats.borrow().iter().find(|c| c.id == tab.id).cloned();
+                let existing = chats.borrow().iter().find(|c| *c.id.borrow() == tab.id).cloned();
                 let chat = if let Some(c) = existing {
                     c
                 } else {
@@ -761,11 +923,10 @@ pub(super) fn install(
                         native: RefCell::new(None),
                         children: RefCell::new(Vec::new()),
                     });
-                    let mut c = conversation(&state, process.clone());
-                    Rc::get_mut(&mut c).expect("new conversation").id = tab.id.clone();
+                    let c = conversation(&state, process.clone(),Some(&tab.id));
                     c.label.set_text(&tab.title);
                     *c.agent_id.borrow_mut() = tab.agent_id.clone();
-                    (c.chat.restore)(tab);
+                    (c.chat().restore)(tab);
                     let label = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                     label.append(&c.label);
                     let close = icon_button("window-close-symbolic", "Cerrar este chat");
@@ -776,13 +937,13 @@ pub(super) fn install(
                     let close_chats = chats.clone();
                     let close_root = root.clone();
                     let p = process.clone();
-                    let cleanup = c.chat.close.clone();
+                    let cleanup = Rc::downgrade(&c);
                     let active_close = active.clone();
                     let state_close = Rc::downgrade(&state);
                     let login_blank = go.clone();
                     close.connect_clicked(move |_| {
                         if let (Some(n), Some(page)) = (weak_n.upgrade(), page.upgrade()) {
-                            cleanup();
+                            if let Some(c)=cleanup.upgrade(){(c.chat().close)();}
                             p.shutdown();
                             close_chats.borrow_mut().retain(|c| c.page != page);
                             close_root
@@ -800,9 +961,9 @@ pub(super) fn install(
                                     native: RefCell::new(None),
                                     children: RefCell::new(Vec::new()),
                                 });
-                                let blank = conversation(&state, p.clone());
+                                let blank = conversation(&state, p.clone(),None);
                                 let go = login_blank.clone();
-                                blank.chat.login.connect_clicked(move |_| go(true));
+                                blank.chat().login.connect_clicked(move |_| go(true));
                                 close_root.children.borrow_mut().push(p);
                                 close_chats.borrow_mut().push(blank.clone());
                                 *active_close.borrow_mut() = blank.clone();
@@ -811,7 +972,7 @@ pub(super) fn install(
                         }
                     });
                     let go = go.clone();
-                    c.chat.login.connect_clicked(move |_| go(true));
+                    c.chat().login.connect_clicked(move |_| go(true));
                     root.children.borrow_mut().push(process);
                     chats.borrow_mut().push(c.clone());
                     // Add to the collection before append_page emits switch-page.
@@ -928,6 +1089,8 @@ pub(super) fn install(
             }
         });
     }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some(){recent_smoke::run(state,side,&notebook,&active,&history,launch.clone(),&selector,&order);}
     app.connect_shutdown(move |_| process.shutdown());
 }
 #[path = "ai_settings.rs"]
@@ -1010,3 +1173,7 @@ mod tests {
         }));
     }
 }
+
+#[cfg(debug_assertions)]
+#[path="ai_recent_smoke.rs"]
+mod recent_smoke;
