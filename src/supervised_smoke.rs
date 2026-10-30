@@ -313,6 +313,37 @@ pub(super) fn run(state: &Rc<State>) {
             serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["stdout"], "WIRE");
         assert_eq!(body["exit_code"], 0);
+        // Each chat owns a private broker: granting one cannot authorize another.
+        let authorized = crate::ui::ai_terminals::install(&state).unwrap();
+        assert_ne!(authorized.path(), broker.path());
+        authorized.full_access.store(true, std::sync::atomic::Ordering::Relaxed);
+        let socket = authorized.path().to_string_lossy().into_owned();
+        let directory = dir.clone();
+        let call = nexuterm::runtime::runtime().spawn(async move {
+            nexuterm::terminal_mcp::call(&socket, "Fixture", "supervised_execute",
+                serde_json::json!({"target_id":"local","directory":directory,"command":"printf FULL","keep_history":false})).await
+        });
+        until(|| call.is_finished()).await;
+        assert!(win("supervised-approval").is_none());
+        let reply = call.await.unwrap().unwrap();
+        assert_eq!(reply["isError"], false);
+        let body: serde_json::Value = serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["stdout"], "FULL");
+        assert!(!broker.full_access.load(std::sync::atomic::Ordering::Relaxed));
+        // Revocation restores the explicit approval dialog on that same socket.
+        authorized.full_access.store(false, std::sync::atomic::Ordering::Relaxed);
+        let socket = authorized.path().to_string_lossy().into_owned();
+        let directory = dir.clone();
+        let call = nexuterm::runtime::runtime().spawn(async move {
+            nexuterm::terminal_mcp::call(&socket, "Fixture", "supervised_execute",
+                serde_json::json!({"target_id":"local","directory":directory,"command":"touch revoked-never","keep_history":false})).await
+        });
+        until(|| win("supervised-approval").is_some()).await;
+        click(&win("supervised-approval").unwrap(), "supervised-reject");
+        until(|| call.is_finished()).await;
+        assert_eq!(call.await.unwrap().unwrap()["isError"], true);
+        assert!(!dir.join("revoked-never").exists());
+        eprintln!("NEXUTERM_SMOKE_BROKER_FULL_ACCESS_OK");
         *c.selected.borrow_mut() = Some(first);
         click(&w, "supervised-history");
         until(|| win("supervised-history-window").is_some()).await;

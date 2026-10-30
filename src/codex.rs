@@ -69,6 +69,7 @@ pub struct Client {
     commands: mpsc::Sender<Command>,
     busy: Arc<AtomicBool>,
     abort: tokio::task::AbortHandle,
+    full_access: Arc<AtomicBool>,
 }
 impl Client {
     pub fn start(agent: AiAgent, writable: bool) -> (Self, mpsc::Receiver<Event>) {
@@ -80,8 +81,10 @@ impl Client {
         let (events, out) = mpsc::channel(32);
         let busy = Arc::new(AtomicBool::new(true));
         let working = busy.clone();
+        let full_access = Arc::new(AtomicBool::new(false));
+        let access = full_access.clone();
         let task = crate::runtime::runtime().spawn(async move {
-            let result=if agent.is_codex(){run(agent,writable,rx,events.clone(),working.clone()).await}else{crate::agent_runtime::run(agent,writable,rx,events.clone(),working.clone(),restoring).await};
+            let result=if agent.is_codex(){run(agent,writable,rx,events.clone(),working.clone(),access).await}else{crate::agent_runtime::run(agent,writable,rx,events.clone(),working.clone(),restoring).await};
             if result.is_err() {
                 let _ = events.send(Event::Error("Se perdió la conexión con el agente. Abre una nueva conversación para reconectar.".into())).await;
             }
@@ -93,6 +96,7 @@ impl Client {
                 commands,
                 busy,
                 abort: task.abort_handle(),
+                full_access,
             },
             out,
         )
@@ -126,6 +130,8 @@ impl Client {
         }
         true
     }
+    pub fn full_access(&self) -> bool { self.full_access.load(Ordering::Relaxed) }
+    pub fn set_full_access(&self, enabled: bool) { self.full_access.store(enabled, Ordering::Relaxed); }
     pub fn permissions(&self, writable: bool) {
         if self
             .commands
@@ -190,6 +196,7 @@ impl Client {
         }
     }
     pub fn close(&self) {
+        self.set_full_access(false);
         let _ = self.commands.try_send(Command::Shutdown);
         self.abort.abort();
         self.busy.store(false, Ordering::Relaxed);
@@ -266,8 +273,12 @@ async fn start_turn(
     model: &str,
     effort: &str,
     directory: &str,
+    writable: bool,
+    full_access: bool,
 ) -> Result<(), ()> {
     let mut params = json!({"threadId":thread,"input":[{"type":"text","text":text}],"cwd":directory});
+    params["approvalPolicy"] = json!(if full_access {"never"} else {"untrusted"});
+    params["sandboxPolicy"] = if full_access {json!({"type":"dangerFullAccess"})} else if writable {json!({"type":"workspaceWrite"})} else {json!({"type":"readOnly"})};
     if !model.is_empty() {
         params["model"] = json!(model);
     }
@@ -282,6 +293,7 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
     busy: Arc<AtomicBool>,
+    full_access: Arc<AtomicBool>,
 ) -> Result<(), ()> {
     let mut directory = if agent.directory.is_empty() {
         std::env::var("HOME").unwrap_or_else(|_| "/".into())
@@ -365,7 +377,7 @@ async fn run(
                         request(&mut input,&mut pending,&mut seq,"account/login/cancel",json!({"loginId":login})).await?;
                     } else if !pending.values().any(|m|matches!(m.as_str(),"thread/start"|"turn/start"|"account/login/start")) { busy.store(false, Ordering::Relaxed); }
                 }
-                Some(Command::Permissions(value)) => { if thread.is_empty() { writable=value; } }
+                Some(Command::Permissions(value)) => { writable=value; }
                 Some(Command::Restore(_)) => {busy.store(false,Ordering::Relaxed);events.send(Event::Error("Este perfil requiere una referencia nativa de Codex".into())).await.map_err(|_|())?;}
                 Some(Command::Resume(id, saved_directory)) => {
                     if !authenticated || !initialized { busy.store(false, Ordering::Relaxed); continue; }
@@ -379,7 +391,7 @@ async fn run(
                         }
                         directory = saved_directory;
                     }
-                    request(&mut input, &mut pending, &mut seq, "thread/resume", json!({"threadId":id,"cwd":directory,"approvalPolicy":"untrusted","sandbox":if writable {"workspace-write"} else {"read-only"}})).await?;
+                    request(&mut input, &mut pending, &mut seq, "thread/resume", json!({"threadId":id,"cwd":directory,"approvalPolicy":if full_access.load(Ordering::Relaxed) {"never"} else {"untrusted"},"sandbox":if full_access.load(Ordering::Relaxed) {"danger-full-access"} else if writable {"workspace-write"} else {"read-only"}})).await?;
                 }
                 Some(Command::History(cursor)) => {
                     if !authenticated || !initialized {
@@ -404,11 +416,11 @@ async fn run(
                         events.send(Event::Error("Conecta tu cuenta de Codex antes de enviar mensajes.".into())).await.map_err(|_| ())?;
                     } else if thread.is_empty() {
                         queued = Some(text);
-                        let mut params = json!({"cwd":directory,"approvalPolicy":"untrusted","sandbox":if writable {"workspace-write"} else {"read-only"}});
+                        let mut params = json!({"cwd":directory,"approvalPolicy":if full_access.load(Ordering::Relaxed) {"never"} else {"untrusted"},"sandbox":if full_access.load(Ordering::Relaxed) {"danger-full-access"} else if writable {"workspace-write"} else {"read-only"}});
                         if !agent.model.is_empty() { params["model"]=json!(agent.model); }
                         params["developerInstructions"]=json!(crate::ai::system_instructions(&agent));
                         request(&mut input,&mut pending,&mut seq,"thread/start",params).await?;
-                    } else { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; }
+                    } else { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory,writable,full_access.load(Ordering::Relaxed)).await?; }
                 }
             }
             },
@@ -533,7 +545,7 @@ async fn run(
                     "thread/start" => {
                         thread=result["thread"]["id"].as_str().ok_or(())?.into();
                         events.send(Event::Session(thread.clone())).await.map_err(|_| ())?;
-                        if let Some(text)=queued.take() { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory).await?; } else { busy.store(false,Ordering::Relaxed); }
+                        if let Some(text)=queued.take() { start_turn(&mut input,&mut pending,&mut seq,&thread,text,&selected_model,&selected_effort,&directory,writable,full_access.load(Ordering::Relaxed)).await?; } else { busy.store(false,Ordering::Relaxed); }
                     }
                     "turn/start" => {
                         turn=result["turn"]["id"].as_str().unwrap_or("").into();

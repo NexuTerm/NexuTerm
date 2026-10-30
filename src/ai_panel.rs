@@ -18,6 +18,7 @@ impl Process {
         }
     }
     pub(super) fn shutdown(&self) {
+        if let Some(bridge) = &self.bridge { bridge.full_access.store(false, std::sync::atomic::Ordering::Relaxed); }
         for child in self.children.borrow().iter() {
             child.shutdown();
         }
@@ -663,7 +664,7 @@ pub(super) fn install(
                 return;
             }
             let process = Rc::new(Process {
-                bridge: root.bridge.clone(),
+                bridge: super::ai_terminals::install(&state),
                 native: RefCell::new(None),
                 children: RefCell::new(Vec::new()),
             });
@@ -919,7 +920,7 @@ pub(super) fn install(
                     c
                 } else {
                     let process = Rc::new(Process {
-                        bridge: root.bridge.clone(),
+                        bridge: super::ai_terminals::install(&state),
                         native: RefCell::new(None),
                         children: RefCell::new(Vec::new()),
                     });
@@ -957,7 +958,7 @@ pub(super) fn install(
                                 && let Some(state) = state_close.upgrade()
                             {
                                 let p = Rc::new(Process {
-                                    bridge: close_root.bridge.clone(),
+                                    bridge: super::ai_terminals::install(&state),
                                     native: RefCell::new(None),
                                     children: RefCell::new(Vec::new()),
                                 });

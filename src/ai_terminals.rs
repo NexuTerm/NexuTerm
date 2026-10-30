@@ -1,4 +1,4 @@
-//! GTK side of the terminal MCP bridge. Operations require explicit or remembered approval.
+//! GTK side of the terminal MCP bridge. Operations follow explicit, remembered or per-chat full-access approval.
 use super::*;
 use nexuterm::terminal_mcp::{Broker, Request, result};
 use serde_json::json;
@@ -31,7 +31,7 @@ fn visible_text(term: &vte4::Terminal) -> String {
         .rev()
         .collect()
 }
-pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
+pub(crate) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
     let (broker, mut requests) = match Broker::start() {
         Ok(value) => value,
         Err(error) => {
@@ -39,6 +39,7 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
             return None;
         }
     };
+    let access = broker.full_access.clone();
     let s = Rc::downgrade(state);
     let grants: Grants = Rc::new(RefCell::new(std::collections::HashMap::new()));
     glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
@@ -46,10 +47,12 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
             return glib::ControlFlow::Break;
         };
         for _ in 0..8 {
-            let Ok(request) = requests.try_recv() else {
-                break;
+            let request = match requests.try_recv() {
+                Ok(request) => request,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return glib::ControlFlow::Break,
             };
-            handle(&state, request, &grants);
+            handle(&state, request, &grants, access.load(std::sync::atomic::Ordering::Relaxed));
         }
         glib::ControlFlow::Continue
     });
@@ -62,8 +65,8 @@ pub(super) fn install(state: &Rc<State>) -> Option<Rc<Broker>> {
     }
     Some(broker)
 }
-fn handle(state: &Rc<State>, request: Request, policies: &Grants) {
-    if matches!(request.name.as_str(),"supervised_targets"|"supervised_execute"){crate::supervised_ui::handle_mcp(state,request);return;}
+fn handle(state: &Rc<State>, request: Request, policies: &Grants, full_access: bool) {
+    if matches!(request.name.as_str(),"supervised_targets"|"supervised_execute"){crate::supervised_ui::handle_mcp_with_access(state,request,full_access);return;}
     let targets = sessions(state);
     let active = state.focused_terminal.borrow().upgrade();
     if request.name == "terminal_list" {
@@ -154,7 +157,7 @@ fn handle(state: &Rc<State>, request: Request, policies: &Grants) {
     let destination_key = target.connection.as_ref().map(|connection|json!({"id":connection.profile.id,"host":connection.profile.host,"port":connection.profile.port,"username":connection.profile.username,"jump":connection.profile.jump_host})).unwrap_or_else(||json!({"local":true,"program":target.spec.program,"args":target.spec.args}));
     // Do not remember command execution across restarts without a known directory.
     let persistent_key = (!execute || cwd.is_some()).then(|| nexuterm::approval_grants::fingerprint(&json!({"operation":operation,"destination":destination_key,"cwd":cwd})));
-    let remembered = policy.as_ref().is_some_and(|policy| {
+    let remembered = full_access || policy.as_ref().is_some_and(|policy| {
         let policy = policy.borrow();
         policy.allows(&session_key) || persistent_key.as_ref().is_some_and(|key|policy.allows(key))
     });

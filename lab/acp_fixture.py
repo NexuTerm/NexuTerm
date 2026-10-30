@@ -64,7 +64,7 @@ for line in sys.stdin:
         assert value['result']['outcome'] == dict(outcome='cancelled')
         continue
     elif method is None and ident == 'permission':
-        assert value['result']['outcome'] in (dict(outcome='selected', optionId='no'), dict(outcome='cancelled'))
+        assert value['result']['outcome'] in (dict(outcome='selected', optionId='yes' if Path('allow-permission').exists() else 'no'), dict(outcome='cancelled'))
         complete(turn_id)
         continue
     if ident is not None:

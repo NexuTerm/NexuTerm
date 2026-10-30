@@ -785,7 +785,11 @@ fn show_history(parent: &gtk::Window) {
     window.present();
 }
 
+#[cfg(debug_assertions)]
 pub fn handle_mcp(state: &Rc<State>, request: nexuterm::terminal_mcp::Request) {
+    handle_mcp_with_access(state, request, false);
+}
+pub fn handle_mcp_with_access(state: &Rc<State>, request: nexuterm::terminal_mcp::Request, full_access: bool) {
     use nexuterm::terminal_mcp::result;
     use serde_json::json;
     if request.name == "supervised_targets" {
@@ -846,14 +850,7 @@ pub fn handle_mcp(state: &Rc<State>, request: nexuterm::terminal_mcp::Request) {
     let live = sender.clone();
     let alive: Rc<dyn Fn() -> bool> =
         Rc::new(move || live.borrow().as_ref().is_some_and(|s| !s.is_closed()));
-    approve_when(
-        state,
-        &parent,
-        spec,
-        target,
-        &request.agent,
-        alive,
-        Rc::new(move |answer| {
+    let callback: Rc<dyn Fn(Result<Arc<Handle>, String>)> = Rc::new(move |answer| {
             let sender = sender.clone();
             match answer {
                 Err(e) => {
@@ -884,8 +881,16 @@ pub fn handle_mcp(state: &Rc<State>, request: nexuterm::terminal_mcp::Request) {
                     });
                 }
             }
-        }),
-    );
+        });
+    if full_access {
+        let answer = spec.validate().and_then(|_| {
+            if alive() { start_approved(state, spec, target) }
+            else { Err("La solicitud caducó; no se ejecutó el comando".into()) }
+        });
+        callback(answer);
+    } else {
+        approve_when(state, &parent, spec, target, &request.agent, alive, callback);
+    }
 }
 
 #[cfg(debug_assertions)]

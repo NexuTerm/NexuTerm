@@ -1,4 +1,4 @@
-//! A private, bounded MCP bridge to the running GUI. Every read/write is approved there.
+//! A private, bounded MCP bridge to the running GUI. Read/write approval follows the explicit policy of its owning chat.
 use serde_json::{Value, json};
 use std::io::Read as _;
 use std::{
@@ -19,6 +19,7 @@ pub struct Request {
 pub struct Broker {
     directory: tempfile::TempDir,
     abort: tokio::task::AbortHandle,
+    pub full_access: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Broker {
     pub fn start() -> Result<(Self, mpsc::Receiver<Request>), String> {
@@ -80,6 +81,7 @@ impl Broker {
             Self {
                 directory,
                 abort: task.abort_handle(),
+                full_access: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             rx,
         ))
@@ -96,10 +98,10 @@ impl Drop for Broker {
 pub fn tools() -> Vec<Value> {
     vec![
         json!({"name":"supervised_targets","description":"List exact targets for separate supervised local/SSH processes. Does not execute or connect.","inputSchema":{"type":"object","properties":{}}}),
-        json!({"name":"supervised_execute","description":"Run a separate non-interactive process after fresh explicit GUI approval of command, target and absolute directory. Does not type into a terminal. Defaults to 60 seconds, captures up to 4 MiB, returns confirmed exit code or unknown outcome. Never retry unknown results automatically. Replies contain bounded output tails; local history is enabled by default.","inputSchema":{"type":"object","properties":{"target_id":{"type":"string"},"directory":{"type":"string"},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120},"keep_history":{"type":"boolean"}},"required":["target_id","directory","command"]}}),
+        json!({"name":"supervised_execute","description":"Run a separate non-interactive process after GUI approval of command, target and absolute directory, or explicit full access for this chat. Does not type into a terminal. Defaults to 60 seconds, captures up to 4 MiB, returns confirmed exit code or unknown outcome. Never retry unknown results automatically. Replies contain bounded output tails; local history is enabled by default.","inputSchema":{"type":"object","properties":{"target_id":{"type":"string"},"directory":{"type":"string"},"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120},"keep_history":{"type":"boolean"}},"required":["target_id","directory","command"]}}),
         json!({"name":"terminal_list","description":"List open local and remote NexuTerm terminals. IDs identify the exact target.","inputSchema":{"type":"object","properties":{}}}),
-        json!({"name":"terminal_read","description":"Read a terminal's visible text after user approval. Never assume the active terminal is local.","inputSchema":{"type":"object","properties":{"terminal_id":{"type":"string"}},"required":["terminal_id"]}}),
-        json!({"name":"terminal_execute","description":"Send a command to the selected existing local or remote terminal, after explicit user approval. It runs in that terminal's current session, not a separate shell. Returns dispatch acknowledgement; read the terminal afterwards. Never infer success or exit status from dispatch.","inputSchema":{"type":"object","properties":{"terminal_id":{"type":"string"},"command":{"type":"string"}},"required":["terminal_id","command"]}}),
+        json!({"name":"terminal_read","description":"Read a terminal's visible text with user approval or explicit full access for this chat. Never assume the active terminal is local.","inputSchema":{"type":"object","properties":{"terminal_id":{"type":"string"}},"required":["terminal_id"]}}),
+        json!({"name":"terminal_execute","description":"Send a command to the selected existing local or remote terminal, with explicit user approval or full access for this chat. It runs in that terminal's current session, not a separate shell. Returns dispatch acknowledgement; read the terminal afterwards. Never infer success or exit status from dispatch.","inputSchema":{"type":"object","properties":{"terminal_id":{"type":"string"},"command":{"type":"string"}},"required":["terminal_id","command"]}}),
     ]
 }
 pub fn result(text: String, error: bool) -> Value {

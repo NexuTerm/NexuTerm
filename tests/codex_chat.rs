@@ -457,3 +457,46 @@ fn per_turn_workspace_tracks_terminal_directory_without_replacing_thread() {
     assert_eq!(turns[0]["params"]["cwd"], first.to_string_lossy().as_ref());
     assert_eq!(turns[1]["params"]["cwd"], second.to_string_lossy().as_ref());
 }
+
+#[test]
+fn full_access_is_scoped_and_can_be_revoked_between_turns() {
+    let fixture = Fixture::new(false);
+    nexuterm::runtime::runtime().block_on(async {
+        let (client, mut rx) = fixture.start();
+        assert!(matches!(event(&mut rx).await, Event::Ready(true)));
+        assert!(!client.full_access());
+        client.set_full_access(true);
+        client.permissions(true);
+        for index in 0..3 {
+            if index == 2 {
+                client.set_full_access(false);
+                client.permissions(false);
+            }
+            assert!(client.send_with_options("hola".into(), format!("model-{index}"), String::new()));
+            loop {
+                match event(&mut rx).await {
+                    Event::Finished(status) => { assert_eq!(status, "completed"); break; }
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+        }
+        let requests = fixture.requests();
+        let start = requests.iter().find(|r|r["method"] == "thread/start").unwrap();
+        assert_eq!(start["params"]["approvalPolicy"], "never");
+        assert_eq!(start["params"]["sandbox"], "danger-full-access");
+        let turns = requests.iter().filter(|r|r["method"] == "turn/start").collect::<Vec<_>>();
+        assert_eq!(turns.len(), 3);
+        for turn in &turns[..2] {
+            assert_eq!(turn["params"]["approvalPolicy"], "never");
+            assert_eq!(turn["params"]["sandboxPolicy"]["type"], "dangerFullAccess");
+        }
+        assert_eq!(turns[2]["params"]["approvalPolicy"], "untrusted");
+        assert_eq!(turns[2]["params"]["sandboxPolicy"]["type"], "readOnly");
+        client.close();
+        let (other, mut events) = fixture.start();
+        assert!(!other.full_access());
+        assert!(matches!(event(&mut events).await, Event::Ready(true)));
+        other.close();
+    });
+}

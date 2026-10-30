@@ -74,7 +74,7 @@ mod session_ui;
 #[path = "workspace_ui.rs"]
 mod workspace_ui;
 #[path="ai_terminals.rs"]
-mod ai_terminals;
+pub(crate) mod ai_terminals;
 #[path = "ai_panel.rs"]
 mod ai_panel;
 #[path = "ai_credentials.rs"]

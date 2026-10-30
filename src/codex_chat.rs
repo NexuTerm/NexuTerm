@@ -458,6 +458,10 @@ fn request_dialog(
         client.reply(id, json!({"decision":"decline"}));
         return;
     }
+    if (approval || tool_approval) && client.full_access() {
+        client.reply(id, json!({"decision":"accept"}));
+        return;
+    }
     let key = approval.then(|| nexuterm::approval_grants::operation(method, &params, item)).flatten();
     if key.as_ref().is_some_and(|key| grants.borrow().allows(key)) {
         client.reply(id, json!({"decision":"accept"}));
@@ -933,11 +937,12 @@ Puede solicitar permiso para leerlas.",
     model.set_tooltip_text(Some("Modelo del agente seleccionado"));
     let models: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
     toolbar.append(&model);
-    let mode = gtk::DropDown::from_strings(&["Solo lectura", "Pedir permiso"]);
+    let mode = gtk::DropDown::from_strings(&["Solo lectura", "Pedir permiso", "Acceso completo"]);
     mode.set_widget_name("ai-permissions");
     mode.add_css_class("flat");
-    mode.set_tooltip_text(Some("Permisos: solo lectura o solicitar aprobación para usar herramientas"));
+    mode.set_tooltip_text(Some("Acceso completo autoriza comandos, archivos y herramientas de este chat sin pedir aprobación. No concede privilegios del sistema."));
     toolbar.append(&mode);
+
     let effort = gtk::DropDown::from_strings(&["Auto"]);
     effort.add_css_class("flat");
     effort.set_tooltip_text(Some("Nivel de razonamiento"));
@@ -997,6 +1002,22 @@ Puede solicitar permiso para leerlas.",
         glib::timeout_add_local(std::time::Duration::from_millis(250),move ||{let (Some(archive),Some(status))=(archive.upgrade(),status.upgrade()) else{return glib::ControlFlow::Break;};if let Some(error)=archive.error() && last.borrow().as_ref()!=Some(&error){status.set_text(&format!("Historial detenido: {error}"));*last.borrow_mut()=Some(error);}glib::ControlFlow::Continue});
     }
     let current = Rc::new(RefCell::new(None::<(String, Rc<Client>)>));
+    {
+        let current = current.clone();
+        let process = process.clone();
+        mode.connect_selected_notify(move |selector| {
+            let full = selector.selected() == 2;
+            if let Some(bridge) = &process.bridge {
+                bridge.full_access.store(full, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some((_, client)) = current.borrow().as_ref() {
+                client.set_full_access(full);
+                client.permissions(selector.selected() != 0);
+            }
+            if full { selector.add_css_class("error"); } else { selector.remove_css_class("error"); }
+        });
+    }
+
     let logout = gtk::LinkButton::with_label("about:blank", "Cerrar sesión");
     logout.set_widget_name("ai-logout");
     logout.set_halign(gtk::Align::End);
@@ -1188,7 +1209,9 @@ Puede solicitar permiso para leerlas.",
                 model.set_selected(0);
             }
             agent.wait_credentials = !agent.is_codex() && !agent.kind.is_api();
-            let (client, mut events) = if resume.as_ref().is_some_and(|c|c.continuation.is_some()){Client::start_recovery(agent.clone(),false)}else{Client::start(agent.clone(),mode.selected()==1)};
+            mode.set_selected(0);
+            if let Some(bridge) = &p.bridge { bridge.full_access.store(false, std::sync::atomic::Ordering::Relaxed); }
+            let (client, mut events) = if resume.as_ref().is_some_and(|c|c.continuation.is_some()){Client::start_recovery(agent.clone(),false)}else{Client::start(agent.clone(),mode.selected()!=0)};
             let client = Rc::new(client);
             {
                 let c = client.clone();
@@ -1341,8 +1364,9 @@ Puede solicitar permiso para leerlas.",
                             reasoning,
                         } => {
                             if let Some(mode) = mode.upgrade() {
-                                mode.set_sensitive(tools);
-                                mode.set_tooltip_text(Some(if tools{"Permisos del agente"}else{"Este proveedor API solo intercambia texto; las extensiones se conservan en el perfil."}));
+                                mode.set_sensitive(true);
+                                let _ = tools;
+                                mode.set_tooltip_text(Some("Acceso completo autoriza las herramientas disponibles sin pedir aprobación; no concede privilegios del sistema ni añade capacidades al proveedor."));
                             }
                             let _ = has_history; // Local recents are available for every agent.
                             if let Some(selector) = reasoning_selector.upgrade() {
@@ -1415,7 +1439,7 @@ Puede solicitar permiso para leerlas.",
                                     let capture_resumed=capture_resumed.clone();
                                     button.connect_clicked(move |_| {
                                         if let Some(mode) = mode.upgrade() {
-                                            c.permissions(mode.selected() == 1);
+                                            c.permissions(mode.selected() != 0);
                                         }
                                         if let Some(pages)=pages.upgrade(){pages.set_visible_child_name("conversation");}
                                         capture_resumed.set(true);
@@ -1474,7 +1498,7 @@ Puede solicitar permiso para leerlas.",
                             }
                             info.set_text("");
                             if let Some(mode) = mode.upgrade() {
-                                mode.set_sensitive(false);
+                                mode.set_sensitive(true);
                             }
                         }
                         Event::Ready(authenticated) => {
@@ -1630,6 +1654,7 @@ Puede solicitar permiso para leerlas.",
                                 method.as_str(),
                                 "item/commandExecution/requestApproval"
                                     | "item/fileChange/requestApproval"
+                                    | "item/tool/requestApproval"
                                     | "item/tool/requestUserInput"
                             ) {
                                 info.set_text("El agente solicitó una operación que este chat todavía no admite; se ha rechazado.");
@@ -1656,6 +1681,19 @@ Puede solicitar permiso para leerlas.",
                             }
                         }
                         Event::Finished(status) => {
+                            #[cfg(debug_assertions)]
+                            if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("full-access") {
+                                assert_eq!(status, "completed");
+                                assert!(client.full_access());
+                                assert!(dialogs.borrow().is_empty());
+                                let selector = mode.upgrade().unwrap();
+                                assert_eq!(selector.selected(), 2);
+                                selector.set_selected(0);
+                                assert!(!client.full_access());
+                                eprintln!("NEXUTERM_SMOKE_FULL_ACCESS_OK");
+                            }
+
+                            if let Some(mode) = mode.upgrade() { mode.set_sensitive(true); }
                             #[cfg(debug_assertions)]
                             if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("copy") && status == "completed" {
                                 let label = buffers.values().find(|label|label.text().starts_with("# Informe")).expect("Markdown response");
@@ -1776,6 +1814,7 @@ Puede solicitar permiso para leerlas.",
                 if let Some(welcome) = welcome.upgrade() {
                     welcome.set_visible(list.first_child().is_none());
                 }
+                if let Some(mode) = mode.upgrade() { mode.set_sensitive(!client.busy() && !awaiting_resume.get()); }
                 if let Some(link) = logout.upgrade() { link.set_sensitive(!client.busy()); }
                 let parked_recent=pages.upgrade().is_some_and(|p|p.visible_child_name().as_deref()==Some("recent")) && list.first_child().is_some();
                 if let Some(history)=history.upgrade(){history.set_sensitive(!client.busy() && !parked_recent);}
@@ -1843,7 +1882,7 @@ Puede solicitar permiso para leerlas.",
             format!("{prompt}\n\nContexto de trabajo de la terminal activa (actual):\n{}\nUsa esta carpeta como base de trabajo salvo que el usuario indique otra. No elijas otro proyecto por el historial. Ejecuta los comandos desde el cwd indicado, con un argumento cwd o un cd explícito si el motor conserva otra carpeta. Si la terminal es remota, utiliza las herramientas de esa terminal; su ruta no es una carpeta local. Si no se conoce la ruta remota, consulta la terminal con los permisos correspondientes.", workspace.context)
         } else { prompt };
         let attached=paths.borrow().iter().map(|p|p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect::<Vec<_>>().join(", ");
-        if let Some(mode)=mode_weak.upgrade(){client.permissions(mode.selected()==1);}
+        if let Some(mode)=mode_weak.upgrade(){client.permissions(mode.selected()!=0);}
         if client.send_in_directory(prompt,selected_model,selected_effort,directory) {
             if let Some(mode)=mode_weak.upgrade(){mode.set_sensitive(false);}
             paths.borrow_mut().clear();if let Some(chips)=chips.upgrade(){while let Some(child)=chips.first_child(){chips.remove(&child);}chips.set_visible(false);}
@@ -1882,13 +1921,14 @@ Puede solicitar permiso para leerlas.",
     #[cfg(debug_assertions)]
     if matches!(
         std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
-        Ok("codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "workspace" | "copy" | "acp" | "api" | "shutdown" | "switch")
+        Ok("full-access" | "codex" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always" | "workspace" | "copy" | "acp" | "api" | "shutdown" | "switch")
     ) {
         let input = composer.downgrade();
         let send = send.downgrade();
         let paths = context.clone();
         let context_row = context_row.downgrade();
         let effort = effort.downgrade();
+        let permissions = mode.downgrade();
         let attempts = Cell::new(0);
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             attempts.set(attempts.get() + 1);
@@ -1909,8 +1949,13 @@ Puede solicitar permiso para leerlas.",
                     if let Some(row) = context_row.upgrade() {
                         row.set_visible(true);
                     }
+                    if std::env::var("NEXUTERM_SMOKE_AI").as_deref() == Ok("full-access") {
+                        let selector = permissions.upgrade().unwrap();
+                        assert_eq!(selector.selected(), 0);
+                        selector.set_selected(2);
+                    }
                     input.buffer().set_text(
-                        if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("codex-approval" | "approval-repeat" | "approval-session" | "approval-always")) {
+                        if matches!(std::env::var("NEXUTERM_SMOKE_AI").as_deref(), Ok("full-access" | "codex-approval" | "approval-repeat" | "approval-session" | "approval-always")) {
                             "approval"
                         } else if matches!(
                             std::env::var("NEXUTERM_SMOKE_AI").as_deref(),
@@ -2237,7 +2282,9 @@ Puede solicitar permiso para leerlas.",
     let close_snapshot=snapshot.clone();
     let closing_archive=archive.clone();let closing_state=Rc::downgrade(state);
     let closing_current=current.clone();
+    let closing_bridge=process.bridge.clone();
     let close: Rc<dyn Fn()> = Rc::new(move || {
+        if let Some(bridge) = &closing_bridge { bridge.full_access.store(false, std::sync::atomic::Ordering::Relaxed); }
         let saved=nexuterm::chat_history::RecentSave::new(close_snapshot());
         nexuterm::runtime::runtime().spawn_blocking(move ||{let _=nexuterm::chat_history::directory().and_then(|dir|saved.save(&dir));});
         generation.set(generation.get() + 1);

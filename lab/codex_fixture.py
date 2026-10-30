@@ -49,8 +49,7 @@ for line in sys.stdin:
     elif method == 'thread/resume':
         result = dict(thread=dict(id='fixture-thread', turns=[dict(items=[dict(type='userMessage', content=[dict(type='text', text='Consulta anterior')]),dict(type='agentMessage', text='Respuesta anterior')])]))
     elif method == 'thread/start':
-        assert params['sandbox'] in ('read-only', 'workspace-write')
-        assert params['approvalPolicy'] == 'untrusted'
+        assert (params['sandbox'], params['approvalPolicy']) in (('read-only', 'untrusted'), ('workspace-write', 'untrusted'), ('danger-full-access', 'never'))
         result = dict(thread=dict(id='fixture-thread'))
     elif method == 'turn/start':
         assert params['threadId'] == 'fixture-thread'
