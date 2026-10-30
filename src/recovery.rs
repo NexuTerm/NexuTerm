@@ -13,7 +13,7 @@ use std::{
 
 pub const TEXT_LIMIT: usize = 8 * 1024 * 1024;
 // JSON escaping can expand one byte to six bytes; write without another text buffer.
-const RECORD_LIMIT: u64 = (TEXT_LIMIT * 6 + 64 * 1024) as u64;
+const RECORD_LIMIT: u64 = (TEXT_LIMIT * 12 + 64 * 1024) as u64;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -120,6 +120,8 @@ pub struct Draft {
     pub id: String,
     pub source: Source,
     pub text: String,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub base_text: Option<String>,
 }
 impl Draft {
     pub fn validate(&self) -> Result<(), String> {
@@ -128,6 +130,13 @@ impl Draft {
         }
         if self.text.len() > TEXT_LIMIT || self.text.contains('\0') {
             return Err("El borrador debe ser texto UTF-8 de hasta 8 MiB, sin bytes nulos".into());
+        }
+        if let Some(base)=&self.base_text {
+            if base.len()>TEXT_LIMIT || base.contains('\0'){return Err("Base de borrador inválida o mayor de 8 MiB".into());}
+            if let Source::Remote{fingerprint:Some(expected),..}=&self.source {
+                use sha2::{Digest,Sha256};
+                if format!("{:x}",Sha256::digest(base.as_bytes()))!=*expected{return Err("La base no corresponde a la huella original del borrador".into());}
+            }
         }
         self.source.validate()
     }
@@ -318,7 +327,20 @@ mod tests {
                 etag: Some("version-1".into()),
             },
             text: "Cambios áé\n".into(),
+            base_text: None,
         }
+    }
+    #[test]
+    fn optional_base_survives_recovery_and_is_bound_to_remote_fingerprint(){
+        use sha2::{Digest,Sha256};
+        let mut draft=draft();let original="Original á\n";
+        draft.source=Source::Remote{profile_id:"fixture".into(),host:"fixture.invalid".into(),destination:"a".repeat(64),path:"/tmp/original".into(),fingerprint:Some(format!("{:x}",Sha256::digest(original.as_bytes())))};
+        draft.base_text=Some(original.into());draft.validate().unwrap();
+        let temp=tempfile::tempdir().unwrap();let journal=Journal::new(temp.path(),&draft.id).unwrap();journal.advance(1);journal.write(1,&draft).unwrap();
+        assert_eq!(read(&temp.path().join(format!("{}.json",draft.id))).unwrap().base_text,Some(original.into()));
+        draft.base_text=Some("Other original".into());assert!(draft.validate().is_err());
+        let mut value=serde_json::to_value(&draft).unwrap();value.as_object_mut().unwrap().remove("base_text");
+        let legacy:Draft=serde_json::from_value(value).unwrap();assert!(legacy.base_text.is_none());legacy.validate().unwrap();
     }
     #[test]
     fn atomic_private_roundtrip_without_touching_original() {

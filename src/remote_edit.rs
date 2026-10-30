@@ -3,7 +3,7 @@ use crate::ssh::SshConnection;
 use bytes::BytesMut;
 use openssh_sftp_client::{
     Sftp,
-    metadata::{MetaDataBuilder, Permissions},
+    metadata::{MetaData, MetaDataBuilder, Permissions},
 };
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::PermissionsExt;
@@ -25,6 +25,9 @@ pub struct RemoteDocument {
     local: PathBuf,
     _directory: tempfile::TempDir,
     fingerprint: Mutex<[u8; 32]>,
+    baseline: Mutex<Option<String>>,
+    original_metadata: Mutex<Option<MetaData>>,
+    review_required: std::sync::atomic::AtomicBool,
 }
 impl RemoteDocument {
     pub fn local_path(&self) -> &Path {
@@ -65,10 +68,13 @@ impl RemoteDocument {
             .map_err(|e| e.to_string())?;
         let local = directory.path().join(name);
         let channel = connection.sftp().await?;
-        let result =
-            tokio::time::timeout(Duration::from_secs(45), read(&channel.sftp, &remote)).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            read_version(&channel.sftp, &remote),
+        )
+        .await;
         let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
-        let contents = result.map_err(|_| "Descarga de edición: tiempo agotado")??;
+        let (contents, metadata) = result.map_err(|_| "Descarga de edición: tiempo agotado")??;
         validate_text(&contents)?;
         let mut output = tokio::fs::OpenOptions::new()
             .write(true)
@@ -88,6 +94,11 @@ impl RemoteDocument {
             local,
             _directory: directory,
             fingerprint: Mutex::new(Sha256::digest(&contents).into()),
+            baseline: Mutex::new(Some(
+                String::from_utf8(contents).map_err(|e| e.to_string())?,
+            )),
+            original_metadata: Mutex::new(Some(metadata)),
+            review_required: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     /// Rebind a recovery draft only to the same destination and original contents.
@@ -117,9 +128,106 @@ impl RemoteDocument {
         Ok(document)
     }
 
+    pub fn require_review(&self){self.review_required.store(true,Ordering::Relaxed);}
+    pub fn requires_review(&self) -> bool {
+        self.review_required.load(Ordering::Relaxed)
+    }
+    /// Attach a recovered draft for comparison, never implicitly accept a changed origin.
+    pub async fn recovery_preview(
+        connection: Arc<SshConnection>,
+        source: &crate::recovery::Source,
+        base: Option<String>,
+    ) -> Result<Arc<Self>, String> {
+        let crate::recovery::Source::Remote {
+            profile_id,
+            destination,
+            path,
+            fingerprint: Some(expected),
+            ..
+        } = source
+        else {
+            return Err("Falta la identidad original del borrador".into());
+        };
+        if connection.profile.id != *profile_id
+            || recovery_destination(&connection.profile) != *destination
+        {
+            return Err("El perfil SSH no corresponde al destino original del borrador".into());
+        }
+        let hash = decode_fingerprint(expected)?;
+        if let Some(base) = &base {
+            validate_text(base.as_bytes())?;
+            if <[u8; 32]>::from(Sha256::digest(base.as_bytes())) != hash {
+                return Err("La base del borrador no corresponde al original".into());
+            }
+        }
+        let document = Self::open(connection, path.clone()).await?;
+        let mut current = document.fingerprint.lock().await;
+        if *current != hash {
+            *current = hash;
+            *document.baseline.lock().await = base;
+            *document.original_metadata.lock().await = None;
+            document.review_required.store(true, Ordering::Relaxed);
+        }
+        drop(current);
+        Ok(document)
+    }
+    pub async fn comparison(&self) -> Result<Comparison, String> {
+        let guard = self.fingerprint.lock().await;
+        let expected = *guard;
+        let base = self.baseline.lock().await.clone();
+        let expected_metadata = *self.original_metadata.lock().await;
+        drop(guard);
+        let channel = self.connection.sftp().await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            read_version(&channel.sftp, &self.remote),
+        )
+        .await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+        let (bytes, metadata) = result.map_err(|_| "Tiempo agotado al comparar el original")??;
+        validate_text(&bytes)?;
+        let remote = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+        Ok(Comparison {
+            base,
+            remote,
+            metadata,
+            expected,
+            base_metadata: expected_metadata,
+        })
+    }
+    /// Only advance the baseline if the version the user reviewed is still current.
+    pub async fn accept_comparison(&self, review: &Comparison) -> Result<(), String> {
+        let mut expected = self.fingerprint.lock().await;
+        if *expected != review.expected
+            || !same_optional_metadata(*self.original_metadata.lock().await, review.base_metadata)
+        {
+            return Err("La base del editor cambió; vuelve a comparar".into());
+        }
+        let channel = self.connection.sftp().await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(45),
+            read_version(&channel.sftp, &self.remote),
+        )
+        .await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+        let (bytes, metadata) =
+            result.map_err(|_| "Tiempo agotado al confirmar la comparación")??;
+        if bytes != review.remote.as_bytes() || !same_metadata(metadata, review.metadata) {
+            return Err("Conflicto: el original volvió a cambiar; abre una comparación nueva. No se ha guardado nada.".into());
+        }
+        *expected = Sha256::digest(&bytes).into();
+        *self.baseline.lock().await = Some(review.remote.clone());
+        *self.original_metadata.lock().await = Some(metadata);
+        self.review_required.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Publish a verified sibling temporary through OpenSSH's atomic rename extension.
     pub async fn save(&self, contents: String) -> Result<(), String> {
         validate_text(contents.as_bytes())?;
+        if self.requires_review() {
+            return Err("Conflicto: revisa y aplica la comparación antes de guardar".into());
+        }
         if self.connection.closed.load(Ordering::Relaxed) {
             return Err("La sesión SSH está desconectada".into());
         }
@@ -139,6 +247,11 @@ impl RemoteDocument {
                 .symlink_metadata(&self.remote)
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Some(base) = *self.original_metadata.lock().await
+                && !same_metadata(base, original)
+            {
+                return Err("Conflicto: el contenido o los metadatos del original cambiaron. Compara las versiones antes de guardar.".into());
+            }
             let permissions = original
                 .permissions()
                 .ok_or("El servidor no informa de los permisos originales")?;
@@ -266,7 +379,20 @@ impl RemoteDocument {
             if uploaded != contents.as_bytes() {
                 return Err("No se pudo verificar el archivo tras el reemplazo. Comprueba el servidor; se conserva el borrador.".into());
             }
+            let final_metadata = sftp
+                .fs()
+                .symlink_metadata(&self.remote)
+                .await
+                .map_err(|e| e.to_string())?;
+            if final_metadata.permissions() != Some(permissions)
+                || final_metadata.uid() != Some(uid)
+                || final_metadata.gid() != Some(gid)
+            {
+                return Err("El archivo publicado cambió de metadatos durante la verificación; se conserva el borrador".into());
+            }
             *expected = Sha256::digest(&uploaded).into();
+            *self.baseline.lock().await = Some(contents.clone());
+            *self.original_metadata.lock().await = Some(final_metadata);
             Ok(())
         };
         let result = tokio::time::timeout(Duration::from_secs(90), operation).await
@@ -294,6 +420,41 @@ impl RemoteDocument {
         result
     }
 }
+#[derive(Clone)]
+pub struct Comparison {
+    pub base: Option<String>,
+    pub remote: String,
+    pub metadata: MetaData,
+    expected: [u8; 32],
+    pub base_metadata: Option<MetaData>,
+}
+fn same_metadata(a: MetaData, b: MetaData) -> bool {
+    a.len() == b.len()
+        && a.modified() == b.modified()
+        && a.uid() == b.uid()
+        && a.gid() == b.gid()
+        && a.permissions() == b.permissions()
+        && a.file_type() == b.file_type()
+}
+fn same_optional_metadata(a: Option<MetaData>, b: Option<MetaData>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_metadata(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+fn decode_fingerprint(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Huella original inválida".into());
+    }
+    let mut out = [0; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "Huella original inválida")?;
+    }
+    Ok(out)
+}
+
 fn fingerprint_hex(hash: &[u8; 32]) -> String {
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -317,6 +478,9 @@ fn validate_text(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 async fn read(sftp: &Sftp, path: &Path) -> Result<Vec<u8>, String> {
+    Ok(read_version(sftp, path).await?.0)
+}
+async fn read_version(sftp: &Sftp, path: &Path) -> Result<(Vec<u8>, MetaData), String> {
     let before = sftp
         .fs()
         .symlink_metadata(path)
@@ -356,10 +520,10 @@ async fn read(sftp: &Sftp, path: &Path) -> Result<Vec<u8>, String> {
             .symlink_metadata(path)
             .await
             .map_err(|e| e.to_string())?;
-        if before.len() != after.len() || before.modified() != after.modified() {
+        if !same_metadata(before, after) {
             return Err("El archivo remoto cambió durante la lectura".into());
         }
-        Ok(bytes)
+        Ok((bytes, after))
     }
     .await;
     let closed = input.close().await.map_err(|e| e.to_string());
