@@ -202,3 +202,21 @@ siga viva antes de lanzar y cancela si se cierra la respuesta pendiente. El reto
 MCP contiene colas acotadas, indicadores de truncamiento e identidad de ejecución;
 la captura completa disponible queda en el registro/exportación, no se reinyecta
 como entrada ni se utiliza para repetir acciones.
+
+### Acceso completo temporal del chat
+
+El selector común conserva Solo lectura y Pedir permiso y añade Acceso completo.
+El cliente mantiene el permiso en memoria; Codex recibe políticas explícitas al
+crear/reanudar el chat y en cada turno, de modo que la revocación se aplica al turno
+siguiente. Las aprobaciones conocidas de comandos, archivos y herramientas se
+aceptan cuando el permiso está activo; las preguntas al usuario no se responden
+automáticamente. ACP conserva su traducción a opciones de autorización del agente.
+
+Cada conversación dispone de un Broker MCP y un socket privado independientes;
+el permiso del puente es una bandera compartida solo por ese chat. El sondeo GTK
+termina al desconectarse el canal para no acumular temporizadores al cerrar chats. Terminales y
+procesos supervisados consultan esa bandera, manteniendo validación de argumentos,
+cuotas, cancelación y comprobación de solicitudes caducadas. Cerrar, cambiar de
+conversación o recuperar reinicia el acceso a Solo lectura; no hay campos nuevos
+en los formatos persistidos. La configuración de herramientas del perfil y las
+restricciones del sistema operativo siguen determinando las capacidades disponibles.

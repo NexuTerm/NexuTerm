@@ -171,7 +171,8 @@ el coste del contraste, sin añadir dependencias ni hacer fusiones automáticas.
 
 Implementados procesos locales con grupo propio y canales SSH separados de la
 terminal interactiva, ligados a destino/carpeta/comando aprobados. Hay interfaz
-propia y herramientas MCP, aprobación nueva por ejecución, stdout/stderr, duración,
+propia y herramientas MCP, aprobación nueva por ejecución (salvo acceso completo
+autorizado para ese chat), stdout/stderr, duración,
 retorno opcional, timeout inicial 60 s y captura total de 4 MiB con aviso de
 truncamiento. Se distingue resultado desconocido en SSH sin afirmar terminación
 remota cuando se cancela o pierde el canal.
@@ -182,6 +183,17 @@ reserva previa. Una captura recuperada es evidencia; no reanuda ni repite comand
 El cierre cancela y espera los activos, protege salidas sin historial confirmado
 y permite exportar o descartar expresamente. Se acotan concurrencia, memoria y
 lecturas de historial; no se añaden dependencias ni se altera la entrada del shell.
+
+## Acceso completo por chat — 30 de octubre de 2026
+
+El selector común añade Acceso completo para Codex, agentes ACP y API. Autoriza
+las herramientas disponibles sin aprobaciones repetidas y se conserva al cambiar
+de modelo. Codex recibe la política sin sandbox y sin preguntas de aprobación;
+ACP acepta sus solicitudes y el puente privado aplica el permiso a terminales y
+procesos supervisados. Cada chat tiene su propio socket; el permiso no se propaga
+a otros chats ni se guarda al cerrar, recuperar o reabrir una conversación.
+Se puede revocar entre turnos. Las preguntas al usuario siguen siendo manuales,
+y se mantienen validación de argumentos, cuotas y límites de ejecución.
 
 ## Fases siguientes, en orden
 

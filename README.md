@@ -109,8 +109,9 @@ la escritura final puede confirmar el registro si el almacenamiento se recupera.
 
 Los agentes con acceso MCP a terminales tienen también **`supervised_targets`** y
 **`supervised_execute`**. La segunda exige `target_id`, `directory` absoluta y
-`command`; `timeout_seconds` y `keep_history` son opcionales. Siempre solicita una
-aprobación nueva, sin reutilizar concesiones de otros tipos de operación. Una
+`command`; `timeout_seconds` y `keep_history` son opcionales. Solicita una
+aprobación nueva salvo que el usuario haya elegido **Acceso completo** para ese
+chat; no reutiliza concesiones de otros tipos de operación. Una
 solicitud caducada antes de aprobar no ejecuta nada; si el solicitante se desconecta
 con el proceso activo, se solicita su cancelación. La respuesta incluye estado,
 duración, retorno opcional, últimos 4 KiB por flujo de la captura conservada e
@@ -483,7 +484,21 @@ Si el proveedor no ofrece ese flujo, configura su clave API y, para agentes nati
 la variable de credencial correspondiente. El botón se oculta cuando Codex confirma
 una sesión autenticada o Copilot tiene una cuenta guardada en su perfil. En Codex,
 **Cerrar sesión** utiliza el cierre oficial del servidor y vuelve a mostrar el acceso.
-El selector **Solo lectura / Pedir permiso** está dentro del editor, junto al modelo.
+El selector **Solo lectura / Pedir permiso / Acceso completo** está dentro del editor,
+junto al modelo, y es común a todos los agentes y modelos. **Acceso completo**
+autoriza las operaciones de las herramientas disponibles de ese chat sin nuevas
+aprobaciones, incluidos comandos, cambios de archivos y las herramientas de
+terminal habilitadas en el perfil. En Codex activa `danger-full-access` y
+`approvalPolicy=never`; en ACP acepta las solicitudes de herramientas; las API
+usan el mismo permiso para el puente de terminales y ejecución supervisada.
+
+El permiso pertenece a ese chat y se mantiene al cambiar de modelo. Cada chat usa
+un puente privado independiente. Para revocarlo, cambia el selector entre turnos;
+no se deshacen operaciones ya ejecutadas. Los chats nuevos, reabiertos o recuperados
+comienzan en **Solo lectura**: el acceso completo no se guarda en el historial ni
+en los espacios. Las preguntas que requieren una respuesta del usuario siguen
+mostrándose. No concede privilegios de administrador ni capacidades que el agente,
+proveedor o sistema operativo no tengan.
 Los controles de acceso son compactos; usuario y cierre de sesión comparten fila.
 Los avisos rutinarios de agente listo y respuesta completada no ocupan una fila.
 
@@ -491,7 +506,7 @@ Las aprobaciones ofrecen **Permitir una vez**, **Permitir en esta sesión** y
 **Permitir siempre** para la misma operación exacta y carpeta de ese agente.
 Los cuatro botones de decisión se muestran en una sola fila compacta.
 Los permisos de sesión del chat desaparecen al cerrar o cambiar su conexión;
-los de terminal duran mientras está abierta la aplicación y se limitan a esa
+los de terminal duran mientras está abierto ese chat y se limitan a esa
 terminal y carpeta. Los persistentes se guardan como huellas, sin comandos ni
 credenciales, en `permission-grants.json` dentro del directorio privado de cada
 agente. Para revocarlos, elimina ese archivo con la aplicación cerrada.
@@ -511,7 +526,7 @@ Con **Acceso a terminales** activado, los agentes compatibles reciben herramient
 para listar terminales abiertas, leer su pantalla y enviar comandos. Pueden elegir
 la última terminal activa o una sesión concreta, local o SSH. Leer o ejecutar exige
 aprobación gráfica con el agente, destino y operación, salvo que coincida con un
-permiso recordado explícitamente. Los comandos se envían a la
+permiso recordado explícitamente o ese chat tenga **Acceso completo**. Los comandos se envían a la
 sesión existente: la confirmación indica que se han enviado, no que hayan terminado
 correctamente. Las API compatibles reciben estas herramientas como funciones;
 los agentes nativos las reciben mediante un servidor MCP privado.

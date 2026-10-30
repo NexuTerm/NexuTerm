@@ -6,6 +6,38 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Acceso completo por chat — 30 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con
+  Rust 1.93.1 y las dependencias existentes, sin añadir bibliotecas.
+- `cargo test --quiet`: 113 pruebas aprobadas y cinco de entorno ignoradas.
+  La nueva prueba comprueba inicio con `danger-full-access`/`never`, permiso
+  mantenido al cambiar de modelo, revocación efectiva en el siguiente turno y
+  cliente nuevo sin acceso completo. La política de cada turno se contrasta con
+  el esquema JSON generado por el Codex instalado, sin peticiones al proveedor.
+- `python3 lab/check_full_access.py`: cuatro recorridos GTK aprobados. Codex
+  y ACP reciben solicitudes reales por el protocolo de los fixtures y las
+  aceptan sin diálogo; el selector permite volver a Solo lectura. Responses y
+  ChatCompletions llaman a `supervised_execute` mediante proveedores HTTP de
+  loopback: se ejecuta un comando de prueba sin diálogo y se devuelve stdout y
+  código de salida confirmados. Cada recorrido comienza con Solo lectura.
+- `python3 lab/check_supervised.py`: temas oscuro/claro aprobados. Dos sockets
+  distintos aíslan el permiso; el autorizado ejecuta sin aprobación y, después
+  de revocarlo, vuelve a mostrar el diálogo. Rechazar no crea el archivo marcador.
+  Siguen pasando límites, exclusión de historial, solicitud caducada, desconexión,
+  SIGKILL con recuperación sin repetición y cierre normal con registro final.
+- Regresiones gráficas: Codex normal y rechazo de aprobación, cambio de Codex a
+  ACP, dos turnos con contexto en Responses/ChatCompletions y
+  `python3 lab/check_chat_recents.py`: aprobadas. Recientes conserva su separación
+  por agente, reapertura, continuidad en la misma pestaña y paginación nativa.
+- Se inspeccionó la captura GTK del chat: el selector permanece dentro del
+  editor y el pie conserva su presentación compacta.
+
+Las pruebas usan agentes sintéticos y API locales; no acreditan todos los
+proveedores reales. Acceso completo autoriza capacidades existentes, no eleva
+privilegios del sistema. El permiso es temporal, por chat y revocable entre turnos;
+no se serializa en perfiles, historial, espacios ni copias de recuperación.
+
 ## Ejecución supervisada — 30 de octubre de 2026
 
 - `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con
