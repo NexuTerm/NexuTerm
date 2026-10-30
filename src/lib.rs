@@ -31,3 +31,8 @@ pub mod approval_grants;
 
 #[cfg(feature = "gui")]
 pub mod session_recovery;
+
+pub mod chat_state;
+
+#[cfg(feature="gui")]
+pub mod chat_history;
