@@ -125,6 +125,11 @@ impl SshConnection {
         .map_err(|e| e.to_string())?;
         Ok(SftpChannel { sftp, child })
     }
+    pub(crate) fn execution_command(&self,script:&str,directory:&Path)->Command{
+        let mut command=self.channel_command();
+        command.arg("--").arg(&self.profile.host).arg(format!("cd {} && exec /bin/sh -c {}",quote(&directory.to_string_lossy()),quote(script)));
+        command
+    }
     pub async fn capture(&self, script: &str) -> Result<String, String> {
         self.ready().await?;
         let mut child = self
