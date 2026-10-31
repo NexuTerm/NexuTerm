@@ -7,6 +7,9 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+#[path = "recipe_ui.rs"]
+mod recipe_ui;
+
 pub struct Controller {
     window: RefCell<Option<gtk::Window>>,
     jobs: RefCell<Vec<Arc<Handle>>>,
@@ -315,6 +318,7 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
         .wrap_mode(gtk::WrapMode::WordChar)
         .build();
     command.set_widget_name("supervised-command");
+    let read_command = recipe_ui::install(&body, &command);
     body.append(
         &gtk::ScrolledWindow::builder()
             .min_content_height(90)
@@ -414,7 +418,6 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
     let state_weak = Rc::downgrade(state);
     let parent = parent.downgrade();
     let folder = folder.downgrade();
-    let command = command.downgrade();
     let destination = destination.downgrade();
     let timeout = timeout.downgrade();
     let keep = keep.downgrade();
@@ -424,7 +427,6 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
             Some(state),
             Some(parent),
             Some(folder),
-            Some(command),
             Some(destination),
             Some(timeout),
             Some(keep),
@@ -432,7 +434,6 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
             state_weak.upgrade(),
             parent.upgrade(),
             folder.upgrade(),
-            command.upgrade(),
             destination.upgrade(),
             timeout.upgrade(),
             keep.upgrade(),
@@ -447,15 +448,15 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
         let Some(target) = target else {
             return;
         };
-        let b = command.buffer();
-        if b.char_count() > 16384 {
-            if let Some(msg) = msg.upgrade() {
-                msg.set_text("Máximo 16 KiB por comando");
+        let script = match read_command() {
+            Ok(script) => script,
+            Err(error) => {
+                if let Some(msg) = msg.upgrade() { msg.set_text(&error); }
+                return;
             }
-            return;
-        }
+        };
         let spec = Spec {
-            command: b.text(&b.start_iter(), &b.end_iter(), false).into(),
+            command: script,
             directory: folder.text().as_str().into(),
             timeout_secs: timeout.value_as_int() as u64,
             keep_history: keep.is_active(),

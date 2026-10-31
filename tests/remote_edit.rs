@@ -359,6 +359,34 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     for _ in 0..100{if job.snapshot().status==nexuterm::execution::Status::Running{break;}tokio::time::sleep(std::time::Duration::from_millis(10)).await;}job.cancel();assert_eq!(execution_done(&job).await.status,nexuterm::execution::Status::Unknown);
     assert_eq!(connection.capture("printf channel_alive").await.unwrap(),"channel_alive");
     let job=nexuterm::execution::start(spec("exit 255",5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();assert_eq!(execution_done(&job).await.status,nexuterm::execution::Status::Unknown);
+    // Recipes reuse the same authenticated channel. Real disk query; synthetic service tools.
+    let disk = nexuterm::recipes::Recipe::Disk {path:job_dir.to_string_lossy().into(),max_used_percent:100}.command().unwrap();
+    let job = nexuterm::execution::start(spec(&disk,5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();
+    let result = execution_done(&job).await;
+    assert!(matches!(result.exit_code,Some(0 | 2)));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("VERIFICACION:"));
+    let bin = job_dir.join("recipe-bin");
+    tokio::fs::create_dir(&bin).await.unwrap();
+    for (name, script) in [
+        ("systemctl", "#!/bin/sh\ncase \"$1\" in show) printf 'LoadState=loaded\\nActiveState=inactive\\n';; is-active) exit 3;; *) exit 9;; esac\n"),
+        ("journalctl", "#!/bin/sh\nprintf 'remote recipe journal\\n'\n"),
+    ] {
+        use std::os::unix::fs::PermissionsExt;
+        let path = bin.join(name);
+        tokio::fs::write(&path,script).await.unwrap();
+        tokio::fs::set_permissions(path,std::fs::Permissions::from_mode(0o700)).await.unwrap();
+    }
+    for (recipe, code, evidence) in [
+        (nexuterm::recipes::Recipe::Service{unit:"demo.service".into()},3,"servicio no activo"),
+        (nexuterm::recipes::Recipe::Journal{unit:"demo.service".into(),lines:7,minutes:5},0,"remote recipe journal"),
+    ] {
+        let command = format!("PATH={}:$PATH\n{}",nexuterm::ssh::quote(&bin.to_string_lossy()),recipe.command().unwrap());
+        let job = nexuterm::execution::start(spec(&command,5),nexuterm::execution::Target::Ssh(connection.clone())).unwrap();
+        let result = execution_done(&job).await;
+        assert_eq!(result.exit_code,Some(code));
+        assert!(String::from_utf8_lossy(&result.stdout).contains(evidence));
+    }
+    assert_eq!(connection.capture("printf recipes_channel_alive").await.unwrap(),"recipes_channel_alive");
     connection.closed.store(true, Ordering::Relaxed);
     assert!(doc.save("other".into()).await.is_err());
     assert!(

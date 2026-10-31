@@ -56,6 +56,10 @@ pub(super) fn run(state: &Rc<State>) {
         let w = win("supervised-execution").unwrap();
         let c = controller(&state);
         match std::env::var("NEXUTERM_SMOKE_SUPERVISED").as_deref() {
+            Ok("recipes") => {
+                recipes(&state, &parent, &w, &c).await;
+                return;
+            }
             Ok("close") => {
                 let folder = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
                 named(w.upcast_ref(), "supervised-directory")
@@ -426,4 +430,76 @@ fn label_button(w: &gtk::Widget, label: &str) -> Option<gtk::Button> {
         child = c.next_sibling();
     }
     None
+}
+
+async fn recipes(state: &Rc<State>, parent: &gtk::ApplicationWindow, w: &gtk::Window, c: &Rc<Controller>) {
+    let root = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let dir = root.join("space ' $(touch injected)");
+    std::fs::create_dir(&dir).unwrap();
+    let folder = named(w.upcast_ref(), "supervised-directory").unwrap().downcast::<gtk::Entry>().unwrap();
+    folder.set_text(&dir.to_string_lossy());
+    let selector = named(w.upcast_ref(), "recipe-choice").unwrap().downcast::<gtk::DropDown>().unwrap();
+    let parameter = named(w.upcast_ref(), "recipe-parameter").unwrap().downcast::<gtk::Entry>().unwrap();
+    let preview = named(w.upcast_ref(), "supervised-command").unwrap().downcast::<gtk::TextView>().unwrap();
+    command(w, "printf manual-draft");
+    selector.set_selected(1);
+    assert!(!preview.is_editable());
+    parameter.set_text(&dir.to_string_lossy());
+    named(w.upcast_ref(), "recipe-threshold").unwrap().downcast::<gtk::SpinButton>().unwrap().set_value(100.0);
+    click(w, "supervised-run");
+    until(|| win("supervised-approval").is_some()).await;
+    assert!(c.jobs.borrow().is_empty());
+    click(&win("supervised-approval").unwrap(), "supervised-reject");
+    assert!(c.jobs.borrow().is_empty());
+    confirm(w).await;
+    until(|| c.selected.borrow().as_ref().is_some_and(|h|h.finished())).await;
+    let record = c.selected.borrow().as_ref().unwrap().snapshot();
+    assert!(matches!(record.exit_code, Some(0 | 2)));
+    assert!(String::from_utf8_lossy(&record.stdout).contains("VERIFICACION:"));
+    assert!(!dir.join("injected").exists());
+    selector.set_selected(2);
+    parameter.set_text("bad;touch injected.service");
+    assert_eq!(preview.buffer().char_count(), 0);
+    click(w, "supervised-run");
+    assert!(win("supervised-approval").is_none());
+    assert_eq!(c.jobs.borrow().len(), 1);
+    parameter.set_text("demo.service");
+    confirm(w).await;
+    until(|| c.selected.borrow().as_ref().is_some_and(|h|h.finished())).await;
+    let record = c.selected.borrow().as_ref().unwrap().snapshot();
+    assert_eq!(record.exit_code, Some(0));
+    assert!(String::from_utf8_lossy(&record.stdout).contains("servicio activo"));
+    std::fs::write(root.join("service-inactive"), "").unwrap();
+    confirm(w).await;
+    until(|| c.selected.borrow().as_ref().is_some_and(|h|h.finished())).await;
+    assert_eq!(c.selected.borrow().as_ref().unwrap().snapshot().exit_code, Some(3));
+    selector.set_selected(3);
+    assert_eq!(parameter.text(), "demo.service");
+    named(w.upcast_ref(), "recipe-lines").unwrap().downcast::<gtk::SpinButton>().unwrap().set_value(12.0);
+    named(w.upcast_ref(), "recipe-minutes").unwrap().downcast::<gtk::SpinButton>().unwrap().set_value(5.0);
+    confirm(w).await;
+    until(|| c.selected.borrow().as_ref().is_some_and(|h|h.finished())).await;
+    let record = c.selected.borrow().as_ref().unwrap().snapshot();
+    assert_eq!(record.exit_code, Some(0));
+    assert!(String::from_utf8_lossy(&record.stdout).contains("fixture journal"));
+    assert!(record.spec.command.contains("--lines=12 --since='-5 minutes'"));
+    assert_eq!(nexuterm::execution_history::list(&nexuterm::execution_history::directory().unwrap()).unwrap().len(), 4);
+    // Capture the populated recipe before returning to the preserved manual draft.
+    glib::timeout_future(std::time::Duration::from_millis(200)).await;
+    if let Some(path) = std::env::var_os("NEXUTERM_SUPERVISED_SCREENSHOT") {
+        let paintable = gtk::WidgetPaintable::new(Some(w));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(&snapshot, w.width() as f64, w.height() as f64);
+        if let (Some(node), Some(renderer)) = (snapshot.to_node(), w.renderer()) {
+            renderer.render_texture(&node, None).save_to_png(path).unwrap();
+        }
+    }
+    selector.set_selected(0);
+    assert!(preview.is_editable());
+    let b=preview.buffer();
+    assert_eq!(b.text(&b.start_iter(),&b.end_iter(),false), "printf manual-draft");
+    assert!(!dir.join("injected").exists());
+    assert!(!state.supervised.borrow().as_ref().unwrap().closing.get());
+    eprintln!("NEXUTERM_SMOKE_RECIPES_OK");
+    parent.application().unwrap().quit();
 }

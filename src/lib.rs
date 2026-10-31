@@ -44,3 +44,5 @@ pub mod text_diff;
 
 pub mod execution;
 pub mod execution_history;
+
+pub mod recipes;
