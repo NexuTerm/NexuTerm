@@ -55,6 +55,36 @@ ventana. Cambiar de destino vacía la carpeta para que la indiques expresamente.
 tiempo y conservación del historial; **Aprobar y ejecutar** autoriza esa ejecución
 concreta. Rechazar o cerrar la aprobación no inicia ningún proceso.
 
+En esa misma ventana, el selector **Comando libre / Espacio en disco / Estado de
+servicio / Registros systemd** prepara recetas de diagnóstico de solo consulta:
+
+- **Espacio en disco:** ruta absoluta y umbral de uso entre 1 y 100 % (90 % inicial).
+  Muestra `df -Pk` y comprueba el porcentaje final con GNU `df --output=pcent`.
+  Un uso igual o superior al umbral devuelve 2 y se marca `ATENCION` en la salida.
+- **Estado de servicio:** nombre explícito terminado en `.service`; muestra
+  LoadState, ActiveState, SubState y Result, y comprueba `systemctl is-active`.
+  Un servicio activo devuelve 0 y uno no activo, 3. Unidades ausentes o errores de
+  consulta no se presentan como un servicio sano.
+- **Registros systemd:** unidad `.service`, máximo de 1–5000 líneas y periodo de
+  1–10080 minutos (inicialmente 100 líneas/60 minutos). Usa `journalctl` sin paginador
+  y con fechas ISO. Retorno 0 confirma la consulta de los registros accesibles al
+  usuario, no la salud del servicio ni acceso al journal completo.
+
+Las recetas validan los parámetros y muestran una vista previa no editable del
+comando. **Revisar ejecución…** vuelve a validarlos y permite aprobar o rechazar
+el destino, carpeta y comando exactos. Elegir una receta no ejecuta nada. Al volver
+a **Comando libre** se recupera el borrador manual. Las unidades admiten letras
+ASCII, números, `_`, `.`, `@`, `:` y `-`, con inicio alfanumérico y hasta 255 bytes;
+no se interpretan patrones ni fragmentos de shell.
+
+Funcionan en local y sobre una sesión SSH autenticada de un destino Linux con las
+herramientas correspondientes; no instalan programas, solicitan sudo ni cambian
+servicios. Heredan timeout, cancelación, límites, historial privado, exportación y
+recuperación sin repetición. El historial conserva el comando con la identificación
+de receta y sus comprobaciones en la salida. Errores de consulta devuelven 1 y
+herramientas ausentes, 127. Un timeout, cancelación o resultado SSH desconocido
+mantiene el significado de la ejecución supervisada.
+
 Los comandos se ejecutan mediante `/bin/sh`, con entrada estándar cerrada y
 stdout/stderr separados. En local se crea un proceso y grupo propios, con la
 carpeta aprobada y el entorno exportado de NexuTerm. En SSH se utiliza un canal

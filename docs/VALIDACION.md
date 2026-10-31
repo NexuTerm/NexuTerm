@@ -6,6 +6,40 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Recetas de diagnóstico — 30 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con
+  Rust 1.93.1 y las dependencias existentes.
+- `cargo test --quiet`: 117 pruebas aprobadas y cinco de entorno ignoradas.
+  Cuatro pruebas nuevas de recetas ejecutan scripts con herramientas sintéticas,
+  sin modificar PATH global ni consultar servicios de producción. Cubren rutas
+  absolutas con comillas y sintaxis de shell literal, umbral de disco, salida
+  malformada, unidades inválidas, servicio activo/inactivo/ausente, errores,
+  herramientas ausentes y límites del journal.
+- `cargo test --quiet --no-default-features --lib`: 66 pruebas aprobadas.
+- `python3 lab/check_recipes.py`: recorridos GTK en oscuro y claro aprobados.
+  Seleccionar no ejecuta, rechazar no inicia trabajos y los parámetros inválidos
+  no abren aprobación. Disco usa GNU df real sobre una carpeta con comillas y
+  `$(...)` literal; servicio y journal usan fixtures. Se prueban activo/inactivo,
+  límites de líneas/periodo, vista previa no editable, conservación del borrador
+  manual y cuatro registros privados 0600. Capturas `artifacts/recipes-*.png`
+  inspeccionadas para distribución y legibilidad.
+- `python3 lab/check_remote_editor.py`: integración aprobada sobre sshd desechable.
+  Las tres recetas usan el canal autenticado separado: df real con ruta entre
+  comillas, servicio sintético inactivo y journal sintético. Se verifican salida,
+  retorno y continuidad del ControlMaster. También pasan las regresiones gráficas
+  del editor remoto, comparación, recuperación y documentos del espacio.
+- `python3 lab/check_supervised.py`: oscuro/claro, aprobación/rechazo, timeout,
+  cancelación, captura/historial, exclusión, solicitudes caducadas, MCP, aislamiento
+  y revocación de acceso completo, SIGKILL sin repetición y cierre seguro: aprobados.
+
+Los servicios y registros se prueban con fixtures locales/remotos, no con servicios
+industriales ni todos los proveedores systemd. Las recetas requieren Linux y las
+herramientas del destino; disco requiere GNU df. Un journal vacío o sin acceso a
+algunos registros no demuestra que el servicio esté sano. No hay sudo, cambios,
+reinicios ni ejecución automática al recuperar. Se conservan los límites y estados
+no confirmados del motor de ejecución supervisada.
+
 ## Acceso completo por chat — 30 de octubre de 2026
 
 - `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con

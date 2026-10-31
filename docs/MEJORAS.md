@@ -17,12 +17,10 @@ desconocidas; recorrido GTK en procesos separados para guardar, renombrar,
 restaurar, iniciar expresamente y tratar carpetas ausentes o perfiles eliminados.
 `python3 lab/check_workspaces.py` utiliza Xvfb, D-Bus y datos temporales.
 
-Pendiente para cerrar la fase de espacios:
-
-- Registro separado de resultados supervisados. La posición de lectura del chat
-  ya se conserva y la llegada de respuestas respeta la lectura anterior.
-  El historial local, las referencias reanudables y los adjuntos/razonamiento
-  pendientes ya están integrados.
+El registro separado de resultados supervisados ya dispone de historial privado.
+La posición de lectura del chat se conserva y la llegada de respuestas respeta la
+lectura anterior. El historial local, las referencias reanudables y los
+adjuntos/razonamiento pendientes ya están integrados.
 La recuperación de vistas básicas ya conserva cursor, selección y desplazamiento
 por editor; ocultos, selección y desplazamiento por explorador; panel de terminal
 activo y zoom; posición de lectura del chat. FTP/SFTP y RDP/VNC se recuperan
@@ -80,8 +78,7 @@ cola acotada y aviso al detener la captura. Permite excluir el archivo completo
 del chat y borrarlo expresamente, sin modificar las copias de recuperación ni
 resucitar registros borrados. No contiene credenciales gestionadas ni aprobaciones.
 
-Pendiente: otros estados visuales, registro separado de resultados
-supervisados y validación contra proveedores reales. Las copias anteriores no
+Pendiente: otros estados visuales y validación contra proveedores reales. Las copias anteriores no
 pueden reconstruir referencias o mensajes que nunca guardaron; los agentes ACP
 sin capacidad de carga se mantienen consultables. Historial completo no significa
 contexto ilimitado enviado al modelo ni almacenamiento sin límite.
@@ -195,14 +192,27 @@ a otros chats ni se guarda al cerrar, recuperar o reabrir una conversación.
 Se puede revocar entre turnos. Las preguntas al usuario siguen siendo manuales,
 y se mantienen validación de argumentos, cuotas y límites de ejecución.
 
+## Recetas de diagnóstico — 30 de octubre de 2026
+
+Implementadas Espacio en disco, Estado de servicio y Registros systemd dentro de
+Ejecución supervisada. Validan ruta, unidad, umbral, líneas y periodo, generan un
+comando de solo consulta con comprobación final y reutilizan destino/carpeta,
+aprobación, ejecución local/SSH, timeout, cancelación e historial privado. La vista
+previa no se edita; cambiar parámetros no ejecuta nada y regresar a Comando libre
+conserva el borrador. No se instalan herramientas ni se elevan privilegios.
+
+Se distingue umbral de disco alcanzado (retorno 2), servicio no activo (3), fallo
+de consulta (1) y herramienta ausente (127). Consultar el journal con éxito no
+certifica salud del servicio ni acceso a todos sus registros. El historial guarda
+el comando y la evidencia; recuperar nunca repite la receta. Se mantienen los
+límites del transporte y no se añade un formato de persistencia ni dependencias.
+
 ## Fases siguientes, en orden
 
-1. **Recetas:** espacio en disco, estado de servicio y registros systemd; parámetros
-   validados, comprobaciones finales y las mismas aprobaciones que la ejecución.
-2. **Importación y túneles:** previsualización de perfiles OpenSSH sin ejecutar
+1. **Importación y túneles:** previsualización de perfiles OpenSSH sin ejecutar
    directivas; túneles locales/remotos/SOCKS supervisados, loopback por defecto y
    activación explícita.
-3. **Intervenciones:** objetivo, destinos y cronología con evidencias; diagnóstico,
+2. **Intervenciones:** objetivo, destinos y cronología con evidencias; diagnóstico,
    propuesta, aprobación, cambio y verificación; recuperación sin repetir acciones
    y exportación revisable Markdown/JSON con exclusión de contenido sensible.
 

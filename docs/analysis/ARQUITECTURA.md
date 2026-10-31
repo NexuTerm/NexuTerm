@@ -220,3 +220,19 @@ cuotas, cancelación y comprobación de solicitudes caducadas. Cerrar, cambiar d
 conversación o recuperar reinicia el acceso a Solo lectura; no hay campos nuevos
 en los formatos persistidos. La configuración de herramientas del perfil y las
 restricciones del sistema operativo siguen determinando las capacidades disponibles.
+
+### Recetas de diagnóstico
+
+`recipes.rs` valida parámetros tipados y genera comandos Linux de solo consulta
+para disco, servicio y journal. Reutiliza el quoting de SSH, restringe las unidades
+y acota ruta, umbral, líneas, periodo y tamaño final del script. Cada receta incluye
+una comprobación final cuyo mensaje distingue atención, error y consulta completada.
+No hay un motor genérico de workflows ni modificación del formato de Record.
+
+`recipe_ui.rs` añade selector, parámetros y vista previa al formulario supervisado.
+La acción Revisar regenera el comando desde los campos validados y la aprobación
+captura ese Spec con su Target. Se utiliza el mismo proceso local o canal SSH y
+el mismo diario privado. Los callbacks mantienen referencias débiles a los widgets;
+el borrador libre se conserva al alternar vistas y nunca se ejecuta al seleccionar.
+Las pruebas de comandos usan herramientas sintéticas; las de disco también cubren
+GNU df real en local y a través del servidor SSH desechable.
