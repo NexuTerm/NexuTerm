@@ -200,6 +200,13 @@ pub fn directory() -> Result<PathBuf, String> {
         .ok_or("No se encuentra el directorio de datos")?;
     Ok(base.join("nexuterm/transfer-queues"))
 }
+impl Drop for Journal {
+    fn drop(&mut self) {
+        // A forked child can temporarily inherit this open file description before exec.
+        // Release the owner's lease now instead of waiting for the last inherited fd.
+        unsafe { libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN); }
+    }
+}
 impl Journal {
     pub fn open(directory: &Path, scope: &str) -> Result<Self, String> {
         if scope.len() != 64 || !scope.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -555,4 +562,16 @@ mod tests {
         assert!(Journal::open(root.path(), &key).is_err());
         assert_eq!(fs::read(original).unwrap(), b"preserve");
     }
+}
+
+#[test]
+fn transfer_queue_lease_ends_when_owner_drops_even_with_inherited_fd() {
+    let root=tempfile::tempdir().unwrap();let scope="b".repeat(64);let journal=Journal::open(root.path(),&scope).unwrap();
+    let mut pipe=[-1;2];assert_eq!(unsafe{libc::pipe2(pipe.as_mut_ptr(),libc::O_CLOEXEC)},0);
+    let child=unsafe{libc::fork()};assert!(child>=0);
+    if child==0{unsafe{libc::close(pipe[1]);let mut poll=libc::pollfd{fd:pipe[0],events:libc::POLLIN,revents:0};libc::poll(&mut poll,1,1000);libc::_exit(0);}}
+    unsafe{libc::close(pipe[0]);}
+    drop(journal);let reopened=Journal::open(root.path(),&scope);
+    unsafe{let byte=[0u8];libc::write(pipe[1],byte.as_ptr().cast(),1);libc::close(pipe[1]);libc::waitpid(child,std::ptr::null_mut(),0);}
+    assert!(reopened.is_ok(),"The closed owner must release its lease immediately");
 }
