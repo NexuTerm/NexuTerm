@@ -15,6 +15,7 @@ use vte4::prelude::*;
 mod ssh_tools_ui;
 
 pub struct State {
+    pub(crate) interventions: RefCell<Option<Rc<crate::intervention_ui::Controller>>>,
     ssh_tools: RefCell<Option<Rc<ssh_tools_ui::Controller>>>,
     pub(crate) supervised: RefCell<Option<Rc<crate::supervised_ui::Controller>>>,
     pub(crate) transfer_queues: RefCell<std::collections::HashMap<String,Weak<crate::transfer_queue_ui::Controller>>>,
@@ -322,6 +323,7 @@ pub fn build(app: &gtk::Application) {
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        interventions: RefCell::new(None),
         ssh_tools: RefCell::new(None),
         supervised: RefCell::new(None),
         transfer_queues: RefCell::new(std::collections::HashMap::new()),
@@ -463,8 +465,11 @@ pub fn build(app: &gtk::Application) {
             });
             return glib::Propagation::Stop;
         }
+        if crate::intervention_ui::prepare_close(&s,w){return glib::Propagation::Stop;}
         if crate::recovery_ui::prepare_close(&s, w) { return glib::Propagation::Stop; }
         if session_ui::prepare_close(&s,w) { return glib::Propagation::Stop; }
+        crate::intervention_ui::shutdown(&s);
+        crate::supervised_ui::shutdown(&s);
         if let Some(process) = s.ai_process.borrow().as_ref() { process.shutdown(); }
         for h in s.sessions.borrow().iter().filter_map(Weak::upgrade) { h.stop(); }
         for master in s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade) { master.close(); }
@@ -523,6 +528,8 @@ pub fn build(app: &gtk::Application) {
     if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_SSH").is_some() { workspace_ui::smoke_workspace_ssh(&state); }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_EDITOR_BROWSER_VIEWS").is_some() { workspace_ui::smoke_editor_browser_views(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_INTERVENTIONS").is_some(){crate::intervention_ui::smoke(&state);}
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some(){ssh_tools_ui::smoke(&state);}
     #[cfg(debug_assertions)]
@@ -832,7 +839,7 @@ pub fn build(app: &gtk::Application) {
         let manager = state.manager.borrow().clone();
         let app = app.downgrade();
         let window = window.downgrade();
-        let duration = if std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some(){25} else if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some() {20} else if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_QUEUE").is_some() {45} else if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
+        let duration = if std::env::var_os("NEXUTERM_SMOKE_INTERVENTIONS").is_some(){50} else if std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some(){25} else if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some() {20} else if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_QUEUE").is_some() {45} else if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
         {
             20

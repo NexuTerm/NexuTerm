@@ -177,6 +177,11 @@ fn slots() -> &'static Arc<Semaphore> {
 }
 /// Call only after the GUI has approved this exact spec and captured destination.
 pub fn start(spec: Spec, target: Target) -> Result<Arc<Handle>, String> {
+    start_with_id(spec, target, uuid::Uuid::new_v4().to_string())
+}
+/// An intervention persists this ID with the exact approval before starting.
+pub fn start_with_id(spec: Spec, target: Target, id: String) -> Result<Arc<Handle>, String> {
+    uuid::Uuid::parse_str(&id).map_err(|_| "Identificador de ejecución inválido")?;
     spec.validate()?;
     let slot = Arc::new(
         slots()
@@ -186,7 +191,7 @@ pub fn start(spec: Spec, target: Target) -> Result<Arc<Handle>, String> {
     );
     let record = Record {
         version: 1,
-        id: uuid::Uuid::new_v4().to_string(),
+        id,
         spec,
         destination: target.destination(),
         started_at: SystemTime::now()

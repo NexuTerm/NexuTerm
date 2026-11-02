@@ -65,6 +65,7 @@ pub(super) fn install_actions(
                 ("Agentes de IA", "ai-agents"),
                 ("Abrir archivo…", "open-file"),
                 ("Ejecución supervisada…", "supervised"),
+                ("Intervenciones…", "interventions"),
                 ("Recuperar documentos…", "recover-documents"),
                 ("Preferencias…", "preferences"),
                 ("Acerca de NexuTerm", "about"),
@@ -92,6 +93,7 @@ pub(super) fn install_actions(
         "new-terminal",
         "open-file",
         "supervised",
+        "interventions",
         "recover-documents",
         "remote-files",
         "search",
@@ -142,6 +144,7 @@ pub(super) fn install_actions(
                 "new-connection" => profile_dialog(&s, &w, None),
                 "new-terminal" => local_terminal(&s),
                 "supervised" => crate::supervised_ui::show(&s,&w),
+                "interventions" => crate::intervention_ui::show(&s,&w),
                 "open-file" => crate::files::choose_editor(&s, &w),
                 "recover-documents" => crate::recovery_ui::show(&s, &w),
                 "remote-files" => {

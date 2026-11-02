@@ -17,6 +17,7 @@ mod sftp_session;
 mod terminal_colors;
 mod ui;
 mod supervised_ui;
+mod intervention_ui;
 use gtk::{glib, prelude::*};
 
 fn main() -> glib::ExitCode {

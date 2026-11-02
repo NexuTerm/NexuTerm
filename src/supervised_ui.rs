@@ -15,6 +15,8 @@ pub struct Controller {
     jobs: RefCell<Vec<Arc<Handle>>>,
     selected: RefCell<Option<Arc<Handle>>>,
     closing: Cell<bool>,
+    intervention: RefCell<Option<nexuterm::interventions::Link>>,
+    intervention_label: glib::WeakRef<gtk::Label>,
 }
 fn controller(state: &Rc<State>) -> Rc<Controller> {
     if let Some(c) = state.supervised.borrow().as_ref() {
@@ -25,27 +27,11 @@ fn controller(state: &Rc<State>) -> Rc<Controller> {
         jobs: RefCell::new(Vec::new()),
         selected: RefCell::new(None),
         closing: Cell::new(false),
+        intervention: RefCell::new(None),
+        intervention_label: glib::WeakRef::new(),
     });
     *state.supervised.borrow_mut() = Some(c.clone());
     c
-}
-pub fn approve(
-    state: &Rc<State>,
-    parent: &gtk::ApplicationWindow,
-    spec: Spec,
-    target: Target,
-    requester: &str,
-    callback: Rc<dyn Fn(Result<Arc<Handle>, String>)>,
-) {
-    approve_when(
-        state,
-        parent,
-        spec,
-        target,
-        requester,
-        Rc::new(|| true),
-        callback,
-    );
 }
 fn approve_when(
     state: &Rc<State>,
@@ -54,13 +40,14 @@ fn approve_when(
     target: Target,
     requester: &str,
     alive: Rc<dyn Fn() -> bool>,
+    intervention: Option<nexuterm::interventions::Link>,
     callback: Rc<dyn Fn(Result<Arc<Handle>, String>)>,
 ) {
     if let Err(e) = spec.validate() {
         callback(Err(e));
         return;
     }
-    let details = format!(
+    let mut details = format!(
         "Solicitante: {requester}\nDestino: {}\nCarpeta: {}\nTiempo límite: {} s\nHistorial local: {}\n\n{}",
         target.destination().label,
         spec.directory.display(),
@@ -72,6 +59,7 @@ fn approve_when(
         },
         spec.command
     );
+    if let Some(link)=&intervention { details.push_str(&format!("\n\nIntervención: {} · {}. La propuesta y aprobación se guardarán antes de iniciar.",link.intervention_id,link.phase.label())); }
     let dialog = gtk::Window::builder()
         .title("Aprobar ejecución supervisada")
         .transient_for(parent)
@@ -138,6 +126,17 @@ fn approve_when(
             }
             return;
         }
+        if let Some(link)=intervention.clone() {
+            let Some(state)=state.upgrade() else{callback(Err("Ventana cerrada".into()));return;};
+            let saving=Rc::new(Cell::new(true));{let mut writes=state.writes.borrow_mut();writes.retain(|w|w.strong_count()>0);writes.push(Rc::downgrade(&saving));}
+            let spec=spec.clone();let target=target.clone();let callback=callback.clone();let weak=weak.clone();let alive=alive.clone();
+            glib::spawn_future_local(async move{
+                let id=uuid::Uuid::new_v4().to_string();let reference=id.clone();let proposed=spec.clone();let destination=target.destination();
+                let saved=nexuterm::runtime::runtime().spawn_blocking(move||nexuterm::interventions::Store::default_path()?.prepare(&link,proposed,destination,reference)).await.unwrap_or_else(|e|Err(e.to_string()));
+                let result=saved.and_then(|_|{if !alive() || weak.upgrade().is_none_or(|w|!w.is_visible()){return Err("La solicitud se cerró o caducó antes del inicio; no se ejecutó".into());}start_identified(&state,spec,target,Some(id))});
+                saving.set(false);callback(result);if let Some(d)=weak.upgrade(){d.close();}
+            });
+        } else {
         let result = if let Some(state) = state.upgrade() {
             start_approved(&state, spec.clone(), target.clone())
         } else {
@@ -147,10 +146,14 @@ fn approve_when(
         if let Some(d) = weak.upgrade() {
             d.close();
         }
+        }
     });
     dialog.present();
 }
 fn start_approved(state: &Rc<State>, spec: Spec, target: Target) -> Result<Arc<Handle>, String> {
+    start_identified(state,spec,target,None)
+}
+fn start_identified(state:&Rc<State>,spec:Spec,target:Target,id:Option<String>)->Result<Arc<Handle>,String>{
     let c = controller(state);
     if c.closing.get() {
         return Err("La ventana se está cerrando; no se inició el comando".into());
@@ -168,7 +171,7 @@ fn start_approved(state: &Rc<State>, spec: Spec, target: Target) -> Result<Arc<H
         };
         jobs.remove(i);
     }
-    let handle = execution::start(spec, target)?;
+    let handle = if let Some(id)=id {execution::start_with_id(spec,target,id)?} else {execution::start(spec,target)?};
     jobs.push(handle.clone());
     *c.selected.borrow_mut() = Some(handle.clone());
     Ok(handle)
@@ -260,6 +263,10 @@ fn export(parent: &gtk::Window, record: Record) {
         }
     });
 }
+pub fn show_linked(state:&Rc<State>,parent:&gtk::ApplicationWindow,link:nexuterm::interventions::Link){
+    let c=controller(state);*c.intervention.borrow_mut()=Some(link);show(state,parent);update_intervention_label(&c);
+}
+fn update_intervention_label(c:&Controller){if let Some(label)=c.intervention_label.upgrade(){label.set_text(&match c.intervention.borrow().as_ref(){Some(link)=>format!("Intervención {} · {} · nuevas ejecuciones manuales vinculadas",link.intervention_id,link.phase.label()),None=>"Sin intervención vinculada".into()});}}
 pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
     let c = controller(state);
     if let Some(window) = c.window.borrow().as_ref() {
@@ -346,6 +353,9 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
     history.set_widget_name("supervised-history");
     options.append(&history);
     body.append(&options);
+    let link_row=gtk::Box::new(gtk::Orientation::Horizontal,8);
+    let link_label=gtk::Label::new(None);link_label.set_wrap(true);link_label.set_xalign(0.0);link_label.set_hexpand(true);link_label.set_widget_name("execution-intervention");c.intervention_label.set(Some(&link_label));link_row.append(&link_label);
+    let unlink=gtk::Button::with_label("Desvincular");unlink.set_widget_name("execution-unlink");let linked=Rc::downgrade(&c);unlink.connect_clicked(move |_|{if let Some(c)=linked.upgrade(){c.intervention.borrow_mut().take();update_intervention_label(&c);}});link_row.append(&unlink);body.append(&link_row);update_intervention_label(&c);
     let cancel = gtk::Button::with_label("Cancelar proceso seleccionado");
     cancel.set_widget_name("supervised-cancel");
     let export_button = gtk::Button::with_label("Exportar salida…");
@@ -422,6 +432,7 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
     let timeout = timeout.downgrade();
     let keep = keep.downgrade();
     let msg = notice.downgrade();
+    let linked=Rc::downgrade(&c);
     run.connect_clicked(move |_| {
         let (
             Some(state),
@@ -462,12 +473,15 @@ pub fn show(state: &Rc<State>, parent: &gtk::ApplicationWindow) {
             keep_history: keep.is_active(),
         };
         let msg = msg.clone();
-        approve(
+        let intervention=linked.upgrade().and_then(|c|c.intervention.borrow().clone());
+        approve_when(
             &state,
             &parent,
             spec,
             target.clone(),
             "Usuario",
+            Rc::new(||true),
+            intervention,
             Rc::new(move |result| {
                 if let Some(msg) = msg.upgrade() {
                     msg.set_text(&match result {
@@ -890,7 +904,7 @@ pub fn handle_mcp_with_access(state: &Rc<State>, request: nexuterm::terminal_mcp
         });
         callback(answer);
     } else {
-        approve_when(state, &parent, spec, target, &request.agent, alive, callback);
+        approve_when(state, &parent, spec, target, &request.agent, alive, None, callback);
     }
 }
 
@@ -979,4 +993,10 @@ mod tests {
         assert!(text.contains('␀'));
         assert_eq!(r.stdout, vec![b'A', 0, 255]);
     }
+}
+
+/// A retained transient must not outlive its parent on GTK 4.14.
+pub fn shutdown(state:&State){
+    let controller=state.supervised.borrow().as_ref().cloned();
+    if let Some(c)=controller {let window=c.window.borrow_mut().take();if let Some(window)=window{window.set_transient_for(None::<&gtk::Window>);window.destroy();}}
 }
