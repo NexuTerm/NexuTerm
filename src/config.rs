@@ -7,6 +7,7 @@ use std::{
 };
 
 const MAX_CONFIG: u64 = 1024 * 1024;
+fn is_false(value: &bool) -> bool { !value }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Protocol {
@@ -30,6 +31,8 @@ pub struct Profile {
     pub username: String,
     pub identity: String,
     pub ssh_password: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ssh_ignore_config: bool,
     pub jump_host: String,
     pub domain: String,
     pub group: String,
@@ -509,4 +512,16 @@ mod tests {
         assert_eq!(load(&new).unwrap().profiles[0].id, config.profiles[0].id);
         fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn ssh_import_flag_is_optional_for_existing_profiles() {
+    let value=serde_json::to_value(Profile::default()).unwrap();
+    assert!(value.get("ssh_ignore_config").is_none());
+    let mut profile:Profile=serde_json::from_value(value).unwrap();
+    assert!(!profile.ssh_ignore_config);
+    profile.ssh_ignore_config=true;
+    let value=serde_json::to_value(profile).unwrap();
+    assert_eq!(value["ssh_ignore_config"],true);
+    assert!(serde_json::from_value::<Profile>(value).unwrap().ssh_ignore_config);
 }

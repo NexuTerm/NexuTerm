@@ -88,6 +88,7 @@ fn command_with_lookup(
                 "-o".into(),
                 "ServerAliveCountMax=3".into(),
             ];
+            if p.ssh_ignore_config { a.extend(["-F".into(), "/dev/null".into()]); }
             if !p.username.is_empty() {
                 a.extend(["-l".into(), p.username.clone()]);
             }
@@ -267,4 +268,12 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("visor integrado"));
     }
+}
+
+#[test]
+fn imported_profile_uses_only_reviewed_fields() {
+    let profile=Profile{name:"imported".into(),host:"example.invalid".into(),port:22,ssh_ignore_config:true,..Default::default()};
+    let command=command_with_lookup(&profile, |_|Some("ssh".into())).unwrap();
+    assert!(command.args.windows(2).any(|a|a==["-F","/dev/null"]));
+    assert!(!Profile::default().ssh_ignore_config);
 }

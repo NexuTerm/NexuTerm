@@ -11,7 +11,11 @@ use std::{
 };
 use vte4::prelude::*;
 
+#[path = "ssh_tools_ui.rs"]
+mod ssh_tools_ui;
+
 pub struct State {
+    ssh_tools: RefCell<Option<Rc<ssh_tools_ui::Controller>>>,
     pub(crate) supervised: RefCell<Option<Rc<crate::supervised_ui::Controller>>>,
     pub(crate) transfer_queues: RefCell<std::collections::HashMap<String,Weak<crate::transfer_queue_ui::Controller>>>,
     pub(crate) chat_archives: RefCell<Vec<Rc<nexuterm::chat_history::Recorder>>>,
@@ -318,6 +322,7 @@ pub fn build(app: &gtk::Application) {
     status.set_margin_bottom(6);
     root.add_bottom_bar(&status);
     let state = Rc::new(State {
+        ssh_tools: RefCell::new(None),
         supervised: RefCell::new(None),
         transfer_queues: RefCell::new(std::collections::HashMap::new()),
         chat_archives: RefCell::new(Vec::new()),
@@ -409,7 +414,7 @@ pub fn build(app: &gtk::Application) {
     let force = force_close.clone();
     let s = state.clone();
     window.connect_close_request(move |w| {
-        if crate::supervised_ui::closing(&s){s.status.set_text("Cancelando ejecuciones y conservando sus resultados antes de cerrar…");return glib::Propagation::Stop;}
+        if ssh_tools_ui::closing(&s) || crate::supervised_ui::closing(&s){s.status.set_text("Cancelando ejecuciones y conservando sus resultados antes de cerrar…");return glib::Propagation::Stop;}
         if s.writes
             .borrow()
             .iter()
@@ -420,7 +425,7 @@ pub fn build(app: &gtk::Application) {
                 .set_text("Espera a que finalicen las escrituras o cancela las transferencias antes de cerrar.");
             return glib::Propagation::Stop;
         }
-        let active = crate::supervised_ui::busy(&s) || s.ai_process.borrow().as_ref().is_some_and(|p| p.busy()) || s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
+        let active = ssh_tools_ui::busy(&s) || crate::supervised_ui::busy(&s) || s.ai_process.borrow().as_ref().is_some_and(|p| p.busy()) || s.sftp_masters.borrow().iter().filter_map(std::sync::Weak::upgrade).any(|master|master.pid.load(std::sync::atomic::Ordering::Relaxed)>0) || s.desktops.borrow().iter().filter_map(std::sync::Weak::upgrade)
             .any(|d| !d.finished.load(std::sync::atomic::Ordering::Relaxed)) || s
             .sessions
             .borrow()
@@ -437,7 +442,7 @@ pub fn build(app: &gtk::Application) {
             let dialog = gtk::AlertDialog::builder()
                 .modal(true)
                 .message("¿Cerrar NexuTerm?")
-                .detail("Se cerrarán las conexiones y agentes de IA activos y se cancelarán las ejecuciones supervisadas. Los resultados SSH que no se puedan confirmar quedarán como desconocidos. Los documentos modificados se conservarán como borradores de recuperación.")
+                .detail("Se cerrarán las conexiones y agentes de IA activos y se cancelarán las ejecuciones supervisadas y los túneles SSH. Los resultados SSH que no se puedan confirmar quedarán como desconocidos. Los documentos modificados se conservarán como borradores de recuperación.")
                 .buttons(["Cancelar", "Cerrar"])
                 .cancel_button(0)
                 .default_button(0)
@@ -447,6 +452,7 @@ pub fn build(app: &gtk::Application) {
             let state=s.clone();
             glib::spawn_future_local(async move {
                 if dialog.choose_future(Some(&w)).await == Ok(1) {
+                    ssh_tools_ui::stop_all(&state).await;
                     if let Err(error)=crate::supervised_ui::finish_before_close(&state).await{
                         let warning=gtk::AlertDialog::builder().message("No se confirmó el historial de una ejecución").detail(&error).buttons(["Cancelar cierre","Cerrar sin guardar ese historial"]).cancel_button(0).default_button(0).build();
                         if warning.choose_future(Some(&w)).await!=Ok(1){return;}
@@ -517,6 +523,8 @@ pub fn build(app: &gtk::Application) {
     if std::env::var_os("NEXUTERM_SMOKE_WORKSPACE_SSH").is_some() { workspace_ui::smoke_workspace_ssh(&state); }
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_EDITOR_BROWSER_VIEWS").is_some() { workspace_ui::smoke_editor_browser_views(&state); }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some(){ssh_tools_ui::smoke(&state);}
     #[cfg(debug_assertions)]
     if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){crate::supervised_ui::smoke(&state);}
     #[cfg(debug_assertions)]
@@ -824,7 +832,7 @@ pub fn build(app: &gtk::Application) {
         let manager = state.manager.borrow().clone();
         let app = app.downgrade();
         let window = window.downgrade();
-        let duration = if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some() {20} else if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_QUEUE").is_some() {45} else if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
+        let duration = if std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some(){25} else if std::env::var_os("NEXUTERM_SMOKE_SUPERVISED").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_EDITOR_COMPARE").is_some(){20} else if std::env::var_os("NEXUTERM_SMOKE_RECENTS").is_some() {20} else if std::env::var_os("NEXUTERM_SMOKE_TRANSFER_QUEUE").is_some() {45} else if std::env::var_os("NEXUTERM_SMOKE_FILE_BROWSER").is_some()
             || std::env::var_os("NEXUTERM_SMOKE_RDP").is_some()
         {
             20
@@ -1214,7 +1222,8 @@ fn ssh_terminal_command(
     #[cfg(debug_assertions)]
     if profile.id == "remote-editor-fixture"
         && (std::env::var_os("NEXUTERM_SMOKE_REMOTE_EDITOR").is_some()
-            || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some())
+            || std::env::var_os("NEXUTERM_SMOKE_REMOTE_REBIND").is_some()
+            || std::env::var_os("NEXUTERM_SMOKE_SSH_TOOLS").is_some())
     {
         let root = PathBuf::from(std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").unwrap());
         spec.args.splice(
@@ -1770,6 +1779,10 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
     let favorite = gtk::CheckButton::with_label("Favorita");
     favorite.set_active(p.favorite);
     metadata.attach(&favorite, 1, 1, 1, 1);
+    let ignore_ssh_config = gtk::CheckButton::with_label("SSH: ignorar configuración externa (-F /dev/null)");
+    ignore_ssh_config.set_active(p.ssh_ignore_config);
+    ignore_ssh_config.set_tooltip_text(Some("Los perfiles importados solo usan los campos revisados. Desmarca para volver a cargar la configuración OpenSSH externa al conectar."));
+    metadata.attach(&ignore_ssh_config, 0, 2, 2, 1);
     organization.set_child(Some(&metadata));
     grid.attach(&organization, 0, 10, 2, 1);
     let err = gtk::Label::new(None);
@@ -1912,6 +1925,7 @@ fn profile_dialog(state: &Rc<State>, window: &gtk::ApplicationWindow, index: Opt
                     String::new()
                 },
                 ssh_password:matches!(selected,Protocol::Ssh|Protocol::Sftp)&&ssh_auth.selected()==1,
+                ssh_ignore_config:ignore_ssh_config.is_active(),
                 identity: if matches!(selected, Protocol::Ssh | Protocol::Sftp) && ssh_auth.selected()!=1 {
                     identity.text().into()
                 } else {

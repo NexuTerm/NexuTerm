@@ -45,15 +45,18 @@ def main():
                         time.sleep(.05)
                 probe = subprocess.run(["ssh", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
                                         "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={base / 'known_hosts'}",
-                                        "-i", str(base / "client"), "-p", str(port), "127.0.0.1", "/bin/true"],
+                                        "-i", str(base / "client"), "-l", getpass.getuser(), "-p", str(port), "127.0.0.1", "/bin/true"],
                                        capture_output=True, text=True, timeout=5)
                 if probe.returncode:
                     log.seek(0)
                     raise RuntimeError(probe.stderr + log.read())
                 cargo = shutil.which("cargo")
-                subprocess.run([cargo, "test", "--locked", "--test", "remote_edit", "--", "--ignored", "--test-threads=1"],
+                subprocess.run([cargo, "test", "--locked", "--test", "remote_edit", "--", "--ignored", "--test-threads=1", "--nocapture"],
                                env=env, cwd=ROOT, check=True, timeout=120)
                 print("PASS atomic SFTP: repeated save, inode replacement, metadata, recovery baseline, wrong destination, conflict and cleanup", flush=True)
+                gui_ssh_tools(base, env, "dark")
+                gui_ssh_tools(base, env, "light")
+                gui_ssh_tools(base, env, "dark", close=True)
                 gui(base, env, "dark")
                 gui(base, env, "light")
                 gui_compare(base, env, "dark")
@@ -64,6 +67,37 @@ def main():
             finally:
                 server.terminate()
                 server.wait(timeout=5)
+
+
+def gui_ssh_tools(base, env, theme, close=False):
+    mode = 'close' if close else theme
+    folder = base / ('ssh-tools-' + mode)
+    config = folder / 'config/nexuterm'
+    config.mkdir(parents=True)
+    profile = dict(id='remote-editor-fixture', name='SSH tunnel fixture', protocol='Ssh', host='127.0.0.1', port=int(env['NEXUTERM_REMOTE_FIXTURE_PORT']), username=env['NEXUTERM_REMOTE_FIXTURE_USER'], identity=str(base/'client'))
+    (config/'sessions.json').write_text(json.dumps(dict(version=2, profiles=[profile], preferences=dict(theme=theme))))
+    source = base/'ssh-import-config'
+    source.write_text('Host imported-tool\n HostName example.invalid\n User demo\n Port 2222\nProxyCommand touch '+str(base/'never-imported')+'\nInclude never-read\nMatch exec touch '+str(base/'never-imported')+'\n')
+    env = {k:v for k,v in env.items() if not k.startswith('NEXUTERM_SMOKE') and k != 'NEXUTERM_SCREENSHOT'}
+    env.update(XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(folder/'data'), XDG_STATE_HOME=str(folder/'state'), XDG_CACHE_HOME=str(folder/'cache'), GSK_RENDERER='cairo', GDK_BACKEND='x11', NEXUTERM_SMOKE_TEST='1', NEXUTERM_SMOKE_SSH_TOOLS='close' if close else 'run', NEXUTERM_SSH_TOOLS_SCREENSHOT=str(ROOT/'artifacts'/('ssh-tools-'+mode+'.png')))
+    for phase in (['close'] if close else ['run','restore']):
+        env['NEXUTERM_SMOKE_SSH_TOOLS']=phase
+        result=subprocess.run(['xvfb-run','-a','dbus-run-session','--',str(ROOT/'target/debug/nexuterm')],env=env,cwd=ROOT,capture_output=True,text=True,timeout=35)
+        logs = result.stdout + result.stderr
+        (ROOT/'artifacts'/('ssh-tools-'+mode+'-'+phase+'.log')).write_text(logs)
+        assert result.returncode==0 and 'panicked at' not in logs and 'CRITICAL' not in logs,logs
+        if phase!='close':
+            marker='NEXUTERM_SMOKE_SSH_TOOLS_RESTORE_OK' if phase=='restore' else 'NEXUTERM_SMOKE_SSH_TOOLS_OK'
+            assert marker in logs,logs
+        else:
+            port=int((base/'tunnel-close-port').read_text())
+            with socket.socket() as probe:
+                assert probe.connect_ex(('127.0.0.1',port)) != 0
+        saved=json.loads((config/'sessions.json').read_text())
+        assert len(saved['tunnels'])==1
+        assert any(p['name']=='imported-tool' and p['ssh_ignore_config'] for p in saved['profiles'])
+    assert not (base/'never-imported').exists()
+    print(f'PASS SSH tools GTK {mode}: static import, explicit activation, real TCP traffic, cancellation, no replay and safe close',flush=True)
 
 
 def gui(base, env, theme):
@@ -80,10 +114,11 @@ def gui(base, env, theme):
     env["NEXUTERM_SCREENSHOT"] = str(artifacts / f"remote-editor-code-{theme}.png")
     result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")],
                             cwd=ROOT, env=env, capture_output=True, text=True, timeout=25)
-    (artifacts / f"remote-editor-code-{theme}.log").write_text(result.stdout + result.stderr)
-    assert result.returncode == 0 and "panicked at" not in result.stderr, result.stderr
-    assert "NEXUTERM_SMOKE_REMOTE_SAVED_OK" in result.stderr, result.stderr
-    assert "NEXUTERM_SMOKE_SYNTAX_OK" in result.stderr, result.stderr
+    logs = result.stdout + result.stderr
+    (artifacts / f"remote-editor-code-{theme}.log").write_text(logs)
+    assert result.returncode == 0 and "panicked at" not in logs, logs
+    assert "NEXUTERM_SMOKE_REMOTE_SAVED_OK" in logs, logs
+    assert "NEXUTERM_SMOKE_SYNTAX_OK" in logs, logs
     assert remote.read_text() == "def value():\n    return 42  # editado desde NexuTerm\n"
     print(f"PASS GTK {theme}: remote file activation, private download, syntax colours, edit, Ctrl+S and atomic SFTP replacement")
 
@@ -101,9 +136,10 @@ def gui_compare(base, env, theme):
                NEXUTERM_SMOKE_TEST='1', NEXUTERM_SMOKE_REMOTE_EDITOR=str(remote), NEXUTERM_SMOKE_EDITOR_COMPARE='1',
                NEXUTERM_COMPARE_SCREENSHOT=str(artifacts / ('editor-compare-' + theme + '.png')))
     result = subprocess.run(['xvfb-run', '-a', 'dbus-run-session', '--', str(ROOT / 'target/debug/nexuterm')], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
-    (artifacts / ('editor-compare-' + theme + '.log')).write_text(result.stdout + result.stderr)
-    assert result.returncode == 0 and 'panicked at' not in result.stderr and 'CRITICAL' not in result.stderr, result.stderr
-    assert 'NEXUTERM_SMOKE_EDITOR_COMPARE_OK' in result.stderr, result.stderr
+    logs = result.stdout + result.stderr
+    (artifacts / ('editor-compare-' + theme + '.log')).write_text(logs)
+    assert result.returncode == 0 and 'panicked at' not in logs and 'CRITICAL' not in logs, logs
+    assert 'NEXUTERM_SMOKE_EDITOR_COMPARE_OK' in logs, logs
     assert remote.read_text() == 'def value():\n    return 142\n'
     assert remote.stat().st_mode & 0o777 == 0o640
     print(f'PASS GTK compare {theme}: three versions, cancel, stale original, explicit result, durable base, guarded save and permissions', flush=True)
@@ -131,10 +167,11 @@ def gui_recovery(base, env, conflict):
     artifacts = ROOT / "artifacts"
     env["NEXUTERM_SCREENSHOT"] = str(artifacts / (mode + ".png"))
     result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], cwd=base, env=env, capture_output=True, text=True, timeout=25)
-    (artifacts / (mode + ".log")).write_text(result.stdout + result.stderr)
-    assert result.returncode == 0 and "CRITICAL" not in result.stderr, result.stderr
+    logs = result.stdout + result.stderr
+    (artifacts / (mode + ".log")).write_text(logs)
+    assert result.returncode == 0 and "CRITICAL" not in logs, logs
     marker = "NEXUTERM_SMOKE_RECOVERY_REBIND_" + ("CONFLICT" if conflict else "SAVED") + "_OK"
-    assert marker in result.stderr, result.stderr
+    assert marker in logs, logs
     expected = "def value():\n    return 99  # externo\n" if conflict else changes
     assert remote.read_text() == expected
     stored = json.loads(path.read_text())
@@ -142,7 +179,7 @@ def gui_recovery(base, env, conflict):
         assert stored["source"]["fingerprint"] == hashlib.sha256(changes.encode()).hexdigest()
         assert stored["text"] == changes + "# siguiente edición\n"
     else:
-        assert "NEXUTERM_SMOKE_LEGACY_COMPARISON_OK" in result.stderr
+        assert "NEXUTERM_SMOKE_LEGACY_COMPARISON_OK" in logs
         assert stored["base_text"] == expected
         assert stored["text"] == changes
     print("PASS GTK " + mode + ": explicit authenticated binding, guarded save and durable baseline")
@@ -168,9 +205,10 @@ def gui_workspace_document(base, env):
     artifacts = ROOT / "artifacts"
     env["NEXUTERM_SCREENSHOT"] = str(artifacts / "workspace-document-ssh.png")
     result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(ROOT / "target/debug/nexuterm")], cwd=base, env=env, capture_output=True, text=True, timeout=25)
-    (artifacts / "workspace-document-ssh.log").write_text(result.stdout + result.stderr)
-    assert result.returncode == 0 and "CRITICAL" not in result.stderr, result.stderr
-    assert "NEXUTERM_SMOKE_DOCUMENTS_REMOTE_CLEAN_OK" in result.stderr, result.stderr
+    logs = result.stdout + result.stderr
+    (artifacts / "workspace-document-ssh.log").write_text(logs)
+    assert result.returncode == 0 and "CRITICAL" not in logs, logs
+    assert "NEXUTERM_SMOKE_DOCUMENTS_REMOTE_CLEAN_OK" in logs, logs
     assert remote.read_text() == "Documento SSH actualizado\n"
     assert not list((data / "nexuterm/recovery").glob("*.json"))
     print("PASS GTK workspace SSH document: explicit existing-session open, current original, stable position and no duplicate")

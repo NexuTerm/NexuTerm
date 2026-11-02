@@ -62,6 +62,7 @@ impl SshConnection {
     }
     fn channel_command(&self) -> Command {
         let mut cmd = Command::new("ssh");
+        if self.profile.ssh_ignore_config { cmd.args(["-F", "/dev/null"]); }
         cmd.args(["-S"])
             .arg(self.socket())
             .args([
@@ -79,6 +80,21 @@ impl SshConnection {
         }
         cmd.kill_on_drop(true);
         cmd
+    }
+    pub(crate) async fn forward_control(&self, operation: &str, arguments: &[String]) -> Result<String, String> {
+        let mut cmd = self.channel_command();
+        cmd.args(["-F", "/dev/null", "-o", "PermitLocalCommand=no", "-o", "ExitOnForwardFailure=yes", "-O", operation])
+            .args(arguments).arg("--").arg(&self.profile.host)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child=cmd.spawn().map_err(|e|e.to_string())?;
+        let operation=async {
+            let mut bytes=Vec::new();
+            child.stderr.take().unwrap().take(16385).read_to_end(&mut bytes).await.map_err(|e|e.to_string())?;
+            let status=child.wait().await.map_err(|e|e.to_string())?;
+            let detail=String::from_utf8_lossy(&bytes[..bytes.len().min(16384)]).into_owned();
+            if status.success(){Ok(detail)}else{Err(format!("SSH {:?}: {detail}",status.code()))}
+        };
+        tokio::time::timeout(Duration::from_secs(5),operation).await.map_err(|_|"SSH no confirmó la operación en cinco segundos".to_string())?
     }
     pub async fn ready(&self) -> Result<(), String> {
         for _ in 0..60 {
@@ -198,4 +214,12 @@ mod tests {
             PathBuf::from("/safe/á file")
         );
     }
+}
+
+#[test]
+fn imported_multiplexed_channels_also_ignore_external_configuration() {
+    let c=SshConnection::new(Profile{name:"imported".into(),host:"example.invalid".into(),port:22,ssh_ignore_config:true,..Default::default()}).unwrap();
+    let command=c.channel_command();
+    let args=command.as_std().get_args().map(|s|s.to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert!(args.windows(2).any(|a|a==["-F","/dev/null"]));
 }

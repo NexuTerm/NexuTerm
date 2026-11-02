@@ -41,6 +41,8 @@ pub(super) fn install_actions(
             "Conexiones",
             vec![
                 ("Administrar sesiones…", "sessions"),
+                ("Importar perfiles OpenSSH…", "ssh-import"),
+                ("Túneles SSH…", "ssh-tunnels"),
                 ("Espacios de trabajo…", "workspaces"),
                 ("Recuperar sesión anterior…", "recover-session"),
             ],
@@ -82,6 +84,8 @@ pub(super) fn install_actions(
         "connections",
         "local-files",
         "sessions",
+        "ssh-import",
+        "ssh-tunnels",
         "workspaces",
         "recover-session",
         "new-connection",
@@ -131,6 +135,8 @@ pub(super) fn install_actions(
                     }
                 }
                 "sessions" => sessions::show(&s, &w),
+                "ssh-import" => ssh_tools_ui::import(&s,&w),
+                "ssh-tunnels" => ssh_tools_ui::show(&s,&w),
                 "workspaces" => workspace_ui::show(&s, &w),
                 "recover-session" => session_ui::show(&s,&w,false),
                 "new-connection" => profile_dialog(&s, &w, None),

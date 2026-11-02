@@ -46,3 +46,6 @@ pub mod execution;
 pub mod execution_history;
 
 pub mod recipes;
+
+pub mod ssh_import;
+pub mod tunnels;

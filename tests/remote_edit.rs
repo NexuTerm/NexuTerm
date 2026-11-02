@@ -11,6 +11,7 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     let root = PathBuf::from(
         std::env::var_os("NEXUTERM_REMOTE_FIXTURE_ROOT").expect("Use lab/check_remote_editor.py"),
     );
+    let preparation_started=std::time::Instant::now();
     let connection = SshConnection::new(Profile {
         id: "editor-fixture".into(),
         name: "Editor fixture".into(),
@@ -51,6 +52,8 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
         .spawn()
         .unwrap();
     connection.ready().await.unwrap();
+    println!("NEXUTERM_BENCHMARK ssh_prepare_ms={:.3}",preparation_started.elapsed().as_secs_f64()*1000.0);
+    benchmark_tree(&root,connection.clone()).await;
     let mut client = nexuterm::transfer::Client::start(connection.clone());
     let directory = root.join("remote");
     for (name, folder) in [("created-dir", true), ("created-file.txt", false)] {
@@ -365,6 +368,7 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     let result = execution_done(&job).await;
     assert!(matches!(result.exit_code,Some(0 | 2)));
     assert!(String::from_utf8_lossy(&result.stdout).contains("VERIFICACION:"));
+    println!("NEXUTERM_BENCHMARK diagnostic_disk_ms={} exit={:?}",result.duration_ms,result.exit_code);
     let bin = job_dir.join("recipe-bin");
     tokio::fs::create_dir(&bin).await.unwrap();
     for (name, script) in [
@@ -387,6 +391,7 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
         assert!(String::from_utf8_lossy(&result.stdout).contains(evidence));
     }
     assert_eq!(connection.capture("printf recipes_channel_alive").await.unwrap(),"recipes_channel_alive");
+    let lost_tunnel = check_tunnels(connection.clone()).await;
     connection.closed.store(true, Ordering::Relaxed);
     assert!(doc.save("other".into()).await.is_err());
     assert!(
@@ -436,6 +441,7 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     .await
     .expect("Expected a partial temporary upload");
     master.kill().await.unwrap();
+    wait_tunnel(&lost_tunnel,nexuterm::tunnels::Status::Unknown).await;
     assert!(upload.await.unwrap().is_err());
     let original_after = tokio::fs::read_to_string(&interrupted).await.unwrap();
     assert!(
@@ -453,4 +459,44 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
 
 async fn execution_done(handle:&nexuterm::execution::Handle)->nexuterm::execution::Record{
     tokio::time::timeout(std::time::Duration::from_secs(8),async{while !handle.finished(){tokio::time::sleep(std::time::Duration::from_millis(10)).await;}}).await.unwrap();handle.snapshot()
+}
+
+fn unused_port() -> u16 { std::net::TcpListener::bind(("127.0.0.1",0)).unwrap().local_addr().unwrap().port() }
+async fn wait_tunnel(h:&nexuterm::tunnels::Handle,status:nexuterm::tunnels::Status){
+    tokio::time::timeout(std::time::Duration::from_secs(12),async{loop{let snap=h.snapshot();if snap.status==status{break;}if !matches!(snap.status,nexuterm::tunnels::Status::Starting|nexuterm::tunnels::Status::Active|nexuterm::tunnels::Status::Stopping){panic!("Expected {status:?}, got {snap:?}");}tokio::time::sleep(std::time::Duration::from_millis(25)).await;}}).await.unwrap();
+}
+async fn check_tunnels(connection:std::sync::Arc<SshConnection>)->std::sync::Arc<nexuterm::tunnels::Handle>{
+ use nexuterm::tunnels::{Handle,Spec,Kind,Status};use tokio::io::{AsyncReadExt,AsyncWriteExt};
+ let listener=tokio::net::TcpListener::bind(("127.0.0.1",0)).await.unwrap();let destination=listener.local_addr().unwrap().port();
+ let echo=tokio::spawn(async move{loop{let (mut stream,_)=listener.accept().await.unwrap();tokio::spawn(async move{let mut b=[0u8;64];if let Ok(n)=stream.read(&mut b).await{let _=stream.write_all(&b[..n]).await;}});}});
+ for kind in [Kind::Local,Kind::Remote,Kind::Socks]{
+  let port=unused_port();let spec=Spec{kind,bind:"127.0.0.1".parse().unwrap(),port,host:"127.0.0.1".into(),destination_port:destination};
+  let h=Handle::start(spec,connection.clone()).unwrap();wait_tunnel(&h,Status::Active).await;
+  let mut stream=tokio::net::TcpStream::connect(("127.0.0.1",port)).await.unwrap();
+  if kind==Kind::Socks{
+   stream.write_all(&[5,1,0]).await.unwrap();let mut greeting=[0;2];stream.read_exact(&mut greeting).await.unwrap();assert_eq!(greeting,[5,0]);
+   let mut request=vec![5,1,0,1,127,0,0,1];request.extend(destination.to_be_bytes());stream.write_all(&request).await.unwrap();let mut head=[0;4];stream.read_exact(&mut head).await.unwrap();assert_eq!(head[1],0);let length=match head[3]{1=>6,4=>18,_=>panic!("Unexpected SOCKS address")};let mut address=vec![0;length];stream.read_exact(&mut address).await.unwrap();
+  }
+  stream.write_all(b"tunnel-proof").await.unwrap();let mut output=[0;12];stream.read_exact(&mut output).await.unwrap();assert_eq!(&output,b"tunnel-proof");drop(stream);
+  h.stop();wait_tunnel(&h,Status::Stopped).await;
+  assert!(tokio::net::TcpStream::connect(("127.0.0.1",port)).await.is_err());
+ }
+ let occupied=std::net::TcpListener::bind(("127.0.0.1",0)).unwrap();let port=occupied.local_addr().unwrap().port();
+ let failed=Handle::start(Spec{kind:Kind::Local,bind:"127.0.0.1".parse().unwrap(),port,host:"127.0.0.1".into(),destination_port:destination},connection.clone()).unwrap();wait_tunnel(&failed,Status::Unknown).await;assert!(tokio::net::TcpStream::connect(("127.0.0.1",port)).await.is_ok());
+ let lost=Handle::start(Spec{kind:Kind::Local,bind:"127.0.0.1".parse().unwrap(),port:unused_port(),host:"127.0.0.1".into(),destination_port:destination},connection).unwrap();wait_tunnel(&lost,Status::Active).await;echo.abort();lost
+}
+
+async fn benchmark_tree(root:&std::path::Path,connection:std::sync::Arc<SshConnection>){
+ use nexuterm::{transfer::{Client,Request,Event},transfer_queue::{Journal,Job,Edit,Status}};
+ let source=root.join("benchmark-source");tokio::fs::create_dir(&source).await.unwrap();
+ let payload=vec![b'x';8192];for directory in 0..4{let folder=source.join(format!("folder-{directory}"));tokio::fs::create_dir(&folder).await.unwrap();for file in 0..8{tokio::fs::write(folder.join(format!("file-{file}.txt")),&payload).await.unwrap();}}
+ let mut client=Client::start(connection.clone());let planning=std::time::Instant::now();client.requests.send(Request::PlanUpload{local:source,directory:root.join("remote")}).await.unwrap();
+ let plan=match client.events.recv().await.unwrap(){Event::Planned(plan)=>plan,other=>panic!("Plan failed: {other:?}")};let planning_ms=planning.elapsed().as_secs_f64()*1000.0;
+ assert_eq!(plan.len(),37);assert!(!root.join("remote/benchmark-source").exists());
+ let queue_dir=root.join("benchmark-queue");let scope=nexuterm::transfer_queue::scope(&connection.profile);let queue=Journal::open(&queue_dir,&scope).unwrap();let jobs=plan.into_iter().map(|p|{let mut j=Job::new(p.upload,false,p.local,p.remote);j.mkdir=p.directory;j}).collect();queue.edit(Edit::Add(jobs)).unwrap();
+ let copy=std::time::Instant::now();while let Some(job)=queue.edit(Edit::Begin).unwrap().1{client.requests.send(job.request()).await.unwrap();assert!(matches!(client.events.recv().await.unwrap(),Event::Finished(Ok(()))));queue.edit(Edit::Finish{id:job.id,error:None,cancelled:false}).unwrap();}
+ let copy_ms=copy.elapsed().as_secs_f64()*1000.0;assert!(queue.snapshot().unwrap().jobs.iter().all(|j|j.status==Status::Done));client.stop();drop(queue);
+ let recovery=std::time::Instant::now();let queue=Journal::open(&queue_dir,&scope).unwrap();assert!(queue.edit(Edit::Begin).unwrap().1.is_none());let recovery_ms=recovery.elapsed().as_secs_f64()*1000.0;
+ for directory in 0..4{for file in 0..8{assert_eq!(tokio::fs::read(root.join(format!("remote/benchmark-source/folder-{directory}/file-{file}.txt"))).await.unwrap(),payload);}}
+ println!("NEXUTERM_BENCHMARK tree_files=32 tree_bytes=262144 planning_ms={planning_ms:.3} copy_ms={copy_ms:.3} queue_recovery_ms={recovery_ms:.3}");
 }
