@@ -45,6 +45,104 @@ En **Preferencias** puedes elegir abrir los archivos del explorador con la aplic
 El archivo de configuración está en `$XDG_CONFIG_HOME/nexuterm/sessions.json` o `~/.config/nexuterm/sessions.json`.
 Si no se puede cargar o contiene una versión desconocida, se conserva y se deshabilita el guardado de sesiones.
 
+## Importación de perfiles OpenSSH
+
+En **Menú → Conexiones → Importar perfiles OpenSSH…** selecciona un archivo local
+para previsualizarlo. No se ejecuta `ssh -G`, no se evalúa `Match` y no se recorren
+archivos `Include`. Se muestran avisos de las directivas omitidas sin ejecutar ni
+copiar sus órdenes. El archivo original no se modifica y no se abre una conexión.
+
+La importación es parcial y estática: alias `Host` explícitos, `HostName`, `User`,
+`Port` y primer `IdentityFile`. Respeta el primer valor aplicable y la herencia de
+patrones `Host` con `*`, `?` y exclusiones `!`; los patrones no crean perfiles.
+Admite comillas, comentarios y `clave=valor`. Las claves requieren ruta absoluta
+o `~/`; no se expanden variables ni tokens de identidad. `HostName` admite `%h`
+para el alias. `ProxyJump`, `ProxyCommand`, reenvíos y las demás directivas se
+avisan y omiten: revisa los campos antes de importar una configuración parcial.
+
+Marca los perfiles deseados y pulsa **Importar seleccionados sin conectar**. Los
+nombres ya existentes no se sobrescriben. Los nuevos perfiles usan
+**SSH: ignorar configuración externa (-F /dev/null)**, también en canales
+multiplexados, para no ejecutar indirectamente lo que se omitió en la vista
+previa. Puedes revisar ese ajuste en la organización del perfil al editarlo.
+Los perfiles anteriores conservan su comportamiento. No se copian claves privadas
+ni credenciales: solo la ruta de identidad. Límites: archivo regular UTF-8 de
+1 MiB, 8192 líneas de hasta 16 KiB y 256 alias explícitos.
+
+## Túneles SSH supervisados
+
+En **Menú → Conexiones → Túneles SSH…** selecciona perfil, tipo y extremos:
+
+- **Local (-L):** escucha en este equipo y conecta al destino desde el servidor SSH.
+- **Remoto (-R):** escucha en el servidor y conecta al destino desde este equipo.
+- **SOCKS local (-D):** proxy SOCKS4/5; cada cliente elige su destino.
+
+La escucha inicial es `127.0.0.1`; admite direcciones IP literales IPv4/IPv6 y
+puertos de 1 a 65535. Una escucha fuera de loopback se señala en la aprobación.
+Para reenvíos remotos, la política `GatewayPorts` del servidor determina la
+interfaz efectiva y puede imponer una escucha distinta a la solicitada.
+
+**Guardar nueva definición** conserva los parámetros en la configuración privada,
+incluso sin conexión. Seleccionar una definición o recuperar la sesión nunca la
+activa. Para **Revisar y activar…** necesitas una sesión SSH autenticada de ese
+perfil; actualiza el listado después de abrirla. La confirmación muestra la sesión
+y ambos extremos. Un perfil ausente no se sustituye silenciosamente por otro.
+
+Se utilizan `ssh -O forward/check/cancel` sobre el ControlMaster existente, sin
+comando remoto, nueva autenticación ni reconexión automática. La interfaz muestra
+Preparando, Activo, Deteniendo, Detenido, No iniciado o Resultado desconocido.
+**Activo** confirma la respuesta de SSH, no la disponibilidad del servicio destino.
+Un puerto ocupado o una respuesta perdida no se presenta como una apertura segura;
+no se cancela automáticamente una regla posiblemente ajena tras un fallo de apertura.
+
+**Detener túnel seleccionado** solicita la cancelación de la regla exacta. Si el
+estado es desconocido permite una nueva cancelación explícita; comprueba el destino
+antes de repetir una apertura. La cancelación de la escucha puede dejar continuar
+conexiones ya establecidas. Cerrar la ventana de túneles solo la oculta; cerrar
+NexuTerm pide confirmación, cancela y espera los túneles antes de cerrar las sesiones.
+
+Máximo de 64 definiciones y 16 resultados activos/no confirmados por ventana;
+los resultados terminados pueden retirarse al incorporar otros. Se comprueba el
+ControlMaster cada dos segundos y cada operación tiene un máximo de cinco segundos.
+Las definiciones no contienen credenciales y no tienen autoinicio. Los estados y
+mensajes de esta ventana son temporales; se guardan las definiciones, no un diario
+de tráfico ni resultados del servicio. Borrar una definición exige confirmación
+y no detiene un túnel que siga activo.
+
+## Intervenciones
+
+En **Menú → Vista y herramientas → Intervenciones…** crea un contexto con título,
+objetivo y destinos. Añade notas de diagnóstico, propuesta, aprobación, cambio o
+verificación; una nota de aprobación documenta una decisión, pero no concede permisos.
+El borrador se guarda cada segundo y al cerrar normalmente. Recuperar un contexto
+muestra sus notas y evidencias sin repetir comandos ni conectar destinos.
+
+**Preparar ejecución vinculada…** abre el formulario supervisado para diagnóstico,
+cambio o verificación. Revisa allí destino, carpeta, comando y tiempo; cada acción
+requiere su aprobación habitual y conservar historial. La propuesta y aprobación
+exactas se guardan antes de iniciar el proceso. **Desvincular** permite volver al
+uso independiente. Los chats y MCP no se vinculan automáticamente al contexto.
+También puedes asociar explícitamente una ejecución que ya exista en el historial.
+Si falta su registro o quedó interrumpido, el informe muestra la incertidumbre;
+nunca intenta recrear la evidencia ejecutando otra vez el comando.
+
+Genera un informe **Markdown o JSON**, revisa su vista previa editable y exporta a
+un archivo nuevo. Inicialmente no incluye comandos ni salidas; puedes activarlos
+y excluir entradas completas. Revisa y elimina información sensible antes de
+exportar: no hay detección automática de secretos. El borrador no se exporta.
+Las salidas del informe son muestras de hasta 64 KiB por flujo, con indicación de
+truncamiento; el historial de ejecución permite exportar su captura completa.
+Cambiar contexto, exclusiones u opciones invalida la vista previa anterior.
+
+Los registros se guardan privadamente en `$XDG_DATA_HOME/nexuterm/interventions`
+(o `~/.local/share/nexuterm/interventions`), con directorio 0700 y archivos 0600.
+Límites: 64 contextos, 512 entradas y 2 MiB por contexto; 130 MiB y 1024 entradas
+de directorio contando escrituras incompletas. Al alcanzar un límite se informa
+del error y se conserva lo anterior, sin expulsión automática. Un informe tiene
+un máximo de 8 MiB y no sobrescribe archivos existentes. Borrar un contexto requiere
+confirmación; no borra el historial de ejecuciones ni cancela procesos en curso.
+Los cambios concurrentes del borrador se detectan en lugar de sobrescribirlos.
+
 ## Ejecución supervisada
 
 En **Menú → Vista y herramientas → Ejecución supervisada…** prepara un comando,
@@ -857,6 +955,7 @@ Las pruebas de escritorio remoto necesitan servidores de laboratorio; no se usan
 ## Documentación técnica
 
 - [Arquitectura y dependencias](docs/analysis/README.md): organización del código, herramientas externas y alcance pendiente.
+- [Aceptación operativa y matriz de distribuciones](docs/ACEPTACION.md): laboratorio reproducible y comprobaciones con operadores.
 - [Historial de validación](docs/VALIDACION.md): resultados registrados por versión y comandos reproducibles; los resultados antiguos no certifican el checkout actual.
 - [Pruebas de conexión de IA](docs/PRUEBAS_CONEXION_IA.md): observaciones fechadas, sujetas a la disponibilidad y autenticación de cada proveedor.
 

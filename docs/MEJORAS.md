@@ -47,9 +47,11 @@ pestañas ya restauradas. El descarte es explícito y no borra originales ni
 borradores. Se conservan los registros dañados y los espacios con nombre siguen
 siendo independientes. Límite inicial: 32 copias de 16 MiB, sin expulsión automática.
 
-Pendiente: los tipos de pestaña y estados visuales aún no compatibles. Una caída puede perder los cambios desde
-la última captura completada; las escrituras o transferencias en curso posponen
-la siguiente captura. No se vuelven a ejecutar operaciones al recuperar.
+La recuperación se amplió después a documentos, FTP/SFTP y RDP/VNC, cursor y
+selección del editor, vistas de exploradores, zoom/foco de terminal y lectura del
+chat. No conserva scrollback de terminal ni sesiones de red vivas. Una caída puede
+perder cambios desde la última captura completada; escrituras o transferencias en
+curso posponen la siguiente captura. No se repiten operaciones al recuperar.
 
 Prueba: `python3 lab/check_session_recovery.py`, con datos privados y SIGKILL real,
 dos capturas sucesivas sin guardar un espacio, restauración al arrancar, fallo y
@@ -78,8 +80,9 @@ cola acotada y aviso al detener la captura. Permite excluir el archivo completo
 del chat y borrarlo expresamente, sin modificar las copias de recuperación ni
 resucitar registros borrados. No contiene credenciales gestionadas ni aprobaciones.
 
-Pendiente: otros estados visuales y validación contra proveedores reales. Las copias anteriores no
-pueden reconstruir referencias o mensajes que nunca guardaron; los agentes ACP
+La posición de lectura y los estados de vista descritos ya se conservan. Sigue
+pendiente la validación con cuentas reales de proveedores. Las copias anteriores
+no pueden reconstruir referencias o mensajes que nunca guardaron; los agentes ACP
 sin capacidad de carga se mantienen consultables. Historial completo no significa
 contexto ilimitado enviado al modelo ni almacenamiento sin límite.
 
@@ -207,14 +210,44 @@ certifica salud del servicio ni acceso a todos sus registros. El historial guard
 el comando y la evidencia; recuperar nunca repite la receta. Se mantienen los
 límites del transporte y no se añade un formato de persistencia ni dependencias.
 
-## Fases siguientes, en orden
+## Importación y túneles — 31 de octubre de 2026
 
-1. **Importación y túneles:** previsualización de perfiles OpenSSH sin ejecutar
-   directivas; túneles locales/remotos/SOCKS supervisados, loopback por defecto y
-   activación explícita.
-2. **Intervenciones:** objetivo, destinos y cronología con evidencias; diagnóstico,
-   propuesta, aprobación, cambio y verificación; recuperación sin repetir acciones
-   y exportación revisable Markdown/JSON con exclusión de contenido sensible.
+Importación estática y parcial de perfiles OpenSSH con previsualización,
+selección, validación y avisos de directivas omitidas. No evalúa Match ni ejecuta
+órdenes ni recorre Include; no modifica el original ni sobrescribe perfiles con
+el mismo nombre. Los perfiles nuevos ignoran configuración externa también en
+canales compartidos; el campo es opcional y conserva la compatibilidad anterior.
+
+Túneles locales, remotos y SOCKS sobre una sesión autenticada existente, con
+revisión explícita de extremos, loopback inicial, control de apertura/cancelación,
+estados desconocidos ante pérdida de confirmación y ausencia de reconexión
+automática. Se reutilizan las definiciones privadas de túneles ya previstas en la
+configuración: guardar/recuperar no activa, borrar no detiene, y el cierre normal
+cancela los activos antes de cerrar SSH. Se acotan definiciones, trabajos, mensajes
+y tiempos. La política GatewayPorts y las conexiones ya establecidas se explican
+en la aprobación/README; no se afirma salud del servicio ni un bind remoto efectivo
+que no se haya comprobado. La importación no pretende reproducir toda la semántica
+OpenSSH y los estados de túnel son temporales, sin diario de tráfico.
+
+## Intervenciones — 2 de noviembre de 2026
+
+Implementadas: objetivo, destinos y cronología por fases; notas y borrador privado,
+recuperación sin repetición y vinculación explícita de ejecuciones supervisadas.
+La propuesta y aprobación del comando y destino exactos se registran duraderamente
+antes del arranque. Las notas no conceden permisos. Las evidencias se resuelven
+contra el historial existente; su ausencia, interrupción o identidad incompatible
+se muestran como no confirmadas, sin recrearlas ni volver a ejecutar.
+
+Informes Markdown/JSON revisables, con comandos y salidas desactivados inicialmente,
+exclusión por entrada y edición previa a exportar a un archivo nuevo privado.
+Hay límites de registros, tamaño y muestras de salida; no se eliminan documentos
+automáticamente y los borradores no forman parte del informe. El cierre guarda
+el último borrador y la concurrencia no sobrescribe el de otra ventana.
+
+Las fases de implementación de esta hoja de ruta están desarrolladas. La aceptación
+operativa por soporte/administradores y las comprobaciones con cuentas reales de
+cada proveedor requieren participantes y accesos de prueba disponibles; no se dan
+por realizadas mediante simuladores. Véase [aceptación](ACEPTACION.md).
 
 ## Reglas de aceptación
 

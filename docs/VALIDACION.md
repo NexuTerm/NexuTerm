@@ -6,6 +6,102 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Intervenciones y regresiones — 2 de noviembre de 2026
+
+- Rust 1.93.1, sin dependencias nuevas. `cargo test --locked --jobs 1`: 132
+  pruebas aprobadas y cinco de entorno ignoradas; `cargo test --locked
+  --no-default-features --lib --jobs 1`: 80 aprobadas. Compilaciones debug y
+  release completadas en Ubuntu 26.04.1 del equipo de desarrollo.
+- Persistencia privada y atómica, borradores, conflictos entre ventanas, cuotas
+  incluyendo temporales, enlaces simbólicos, evidencias incompatibles, exclusión,
+  exportación sin sobrescritura y borrado sin resurrección cubiertos por pruebas.
+- `python3 lab/check_interventions.py`: GTK claro/oscuro, crear/notas/exclusiones,
+  rechazo sin proceso, aprobación persistida antes del proceso, resultado real,
+  informes Markdown/JSON, edición/redacción, adjuntar sin repetir, permisos y
+  borradores. SIGKILL real con salida parcial: resultado desconocido al recuperar,
+  contador sin repetición, evidencia eliminada explícita y contexto borrado que no
+  reaparece. Cierre normal fuerza el último borrador antes del temporizador.
+  Capturas claro/oscuro inspeccionadas para distribución y legibilidad.
+- `python3 lab/check_supervised.py`: aprobación/rechazo, carpeta, flujos separados,
+  errores, timeout, cancelación, historial/exclusión, caducidad MCP, recuperación
+  tras SIGKILL y cierre normal con conservación de evidencia: aprobado.
+- `python3 lab/check_remote_editor.py`: SSH/SFTP reales y regresiones gráficas de
+  importación/túneles, editor, comparación y recuperación: aprobado. Añade medidas
+  de preparación SSH, copia de 32 archivos con cola persistida, recuperación y
+  diagnóstico GNU df real; resultados y alcance en [aceptación](ACEPTACION.md).
+- Corregida una carrera de liberación del bloqueo de la cola al heredar un
+  descriptor durante `fork`. Prueba determinista con un hijo reteniendo el
+  descriptor, sin reintentos ni reducción de las aserciones anteriores: aprobada.
+- El laboratorio de Ubuntu 24.04 detectó un error de cierre GTK 4.14; el backtrace
+  mostró una ventana transitoria retenida tras destruir el padre. Se corrige el
+  orden de desvinculación/destrucción y el cierre vuelve a pasar sin CRITICAL.
+  Los laboratorios inspeccionan stdout y stderr para detectar tanto marcadores
+  como errores, independientemente del wrapper Xvfb de cada distribución.
+- `python3 -m py_compile` de los cinco laboratorios modificados y
+  `git diff --check`: correctos en la revisión previa a los commits.
+
+`lab/check_distributions.py --release` completa las dos distribuciones con la misma
+instantánea de fuentes (SHA-256
+`b66f2ccf9de9c6fda3e86545f5d0845f45fc351ca55643471adf6707350d8c3b`):
+
+| Distribución nativa | GTK | libadwaita | VTE | glibc | Resultado |
+| --- | --- | --- | --- | --- | --- |
+| Ubuntu 24.04 | 4.14.5 | 1.5.0 | 0.76.0 | 2.39 | Aprobado |
+| Debian 13 | 4.18.6 | 1.7.6 | 0.80.1 | 2.41 | Aprobado |
+
+En cada distribución: 132 pruebas aprobadas y cinco de entorno ignoradas en la
+suite general; el caso SSH ignorado se ejecuta expresamente mediante su laboratorio
+y pasa. También pasan los cuatro laboratorios gráficos/SSH, compilaciones debug y
+release, comprobación de dependencias y creación del `.deb`. Los laboratorios se
+ejecutan con un usuario sin privilegios; el caso de carpeta sin permisos de
+escritura conserva su aserción. La espera de cancelación de túneles compara una
+sola instantánea para no confundir una transición correcta con un fallo.
+
+Instalación adicional mediante APT en contenedores limpios independientes de Ubuntu
+24.04 y Debian 13, seguida del arranque de `/usr/bin/nexuterm` como usuario sin
+privilegios y comprobación de ventana X11 visible: aprobada en ambos. El entorno
+mínimo advierte de la ausencia del bus de accesibilidad; no se acredita accesibilidad.
+
+El selector nativo de archivos no está automatizado. La exportación del texto
+revisado y sus permisos sí están comprobados. No se acredita aceptación humana,
+Wayland ni cuentas reales de proveedores mediante estos laboratorios aislados.
+
+## Importación y túneles SSH — 31 de octubre de 2026
+
+- `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con
+  Rust 1.93.1; no se añaden dependencias.
+- `cargo test --quiet`: 125 pruebas aprobadas y cinco de entorno ignoradas.
+  `cargo test --quiet --no-default-features --lib`: 74 aprobadas. Se cubren
+  precedencia estática de Host/patrones/exclusiones, comillas, claves y límites;
+  rechazo de campos incompatibles; reglas de reenvío y prevención de inyección;
+  serialización opcional del nuevo ajuste SSH y `-F /dev/null` tanto al iniciar
+  como al usar canales de un perfil importado.
+- `python3 lab/check_remote_editor.py`: integración con sshd desechable y claves
+  efímeras aprobada. Se envían y reciben bytes reales por reenvíos local, remoto
+  y SOCKS5, y se comprueba que cancelar cierra las escuchas. Un puerto ocupado no
+  se anuncia activo ni se cancela automáticamente una regla ajena; matar realmente
+  el ControlMaster produce estado desconocido y no reconecta.
+- El mismo laboratorio valida GTK oscuro/claro: previsualización sin importar,
+  confirmación y guardado sin conectar, avisos por ProxyCommand/Include/Match,
+  original intacto y ausencia de ejecución del marcador malicioso. Apertura
+  rechazada no crea trabajos; la aprobada transmite tráfico y se puede detener.
+  Tras reiniciar, seleccionar una definición no conecta ni activa; permite
+  guardar sin sesión y borrar con confirmación. El cierre normal de la aplicación
+  con un túnel activo cancela antes de salir y se verifica que el puerto quede
+  cerrado. Se inspeccionaron capturas `artifacts/ssh-tools-dark.png` y
+  `artifacts/ssh-tools-light.png` para comprobar distribución y legibilidad.
+- Las regresiones gráficas del editor remoto, comparación de tres versiones,
+  recuperación y documentos SSH del espacio pasan en el mismo servidor aislado.
+  `python3 lab/check_ui.py sessions` y `python3 lab/check_recipes.py`: aprobadas.
+
+Alcance: tráfico IPv4 de loopback y servidor local de laboratorio; las reglas IPv6
+se validan como argumentos, sin acreditar tráfico IPv6 ni escucha pública. No se
+prueban todos los servidores ni políticas GatewayPorts. La importación es parcial,
+no un intérprete completo de OpenSSH; las pruebas automatizan lectura y ventana de
+previsualización, no la interacción con el selector nativo de archivos. Se guardan
+definiciones, no un diario de tráfico. Cancelar una escucha no garantiza cerrar
+streams ya establecidos y los resultados no confirmados requieren comprobación.
+
 ## Recetas de diagnóstico — 30 de octubre de 2026
 
 - `./recompilar.sh -d` y `./recompilar.sh -r`: compilaciones completadas con

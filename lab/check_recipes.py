@@ -30,9 +30,10 @@ def main():
             env = {k:v for k,v in os.environ.items() if not k.startswith('NEXUTERM_SMOKE') and k != 'NEXUTERM_SCREENSHOT'}
             env.update(HOME=temporary, XDG_CONFIG_HOME=str(config.parent), XDG_DATA_HOME=str(base / 'data'), XDG_STATE_HOME=str(base / 'state'), XDG_CACHE_HOME=str(base / 'cache'), SHELL='/bin/sh', PATH=str(binary)+os.pathsep+env['PATH'], GDK_BACKEND='x11', GSK_RENDERER='cairo', NEXUTERM_SMOKE_TEST='1', NEXUTERM_SMOKE_SUPERVISED='recipes', NEXUTERM_SUPERVISED_SCREENSHOT=str(artifacts / f'recipes-{theme}.png'))
             result = subprocess.run(['xvfb-run','-a','dbus-run-session','--',str(ROOT/'target/debug/nexuterm')],env=env,cwd=base,capture_output=True,text=True,timeout=25)
-            (artifacts / f'recipes-{theme}.log').write_text(result.stdout+result.stderr)
-            assert result.returncode == 0 and 'NEXUTERM_SMOKE_RECIPES_OK' in result.stderr, result.stderr
-            assert 'CRITICAL' not in result.stderr and 'panicked at' not in result.stderr, result.stderr
+            logs = result.stdout + result.stderr
+            (artifacts / f'recipes-{theme}.log').write_text(logs)
+            assert result.returncode == 0 and 'NEXUTERM_SMOKE_RECIPES_OK' in logs, logs
+            assert 'CRITICAL' not in logs and 'panicked at' not in logs, logs
             records=list((base/'data/nexuterm/executions').glob('*.json'))
             assert len(records)==4
             assert sorted(json.loads(p.read_text())['exit_code'] for p in records) in ([0,0,0,3],[0,0,2,3])

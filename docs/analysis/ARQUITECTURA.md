@@ -236,3 +236,57 @@ el mismo diario privado. Los callbacks mantienen referencias débiles a los widg
 el borrador libre se conserva al alternar vistas y nunca se ejecuta al seleccionar.
 Las pruebas de comandos usan herramientas sintéticas; las de disco también cubren
 GNU df real en local y a través del servidor SSH desechable.
+
+### Importación estática y túneles
+
+`ssh_import.rs` lee texto regular acotado en segundo plano y construye una vista
+parcial de alias explícitos. No lanza OpenSSH ni evalúa Includes/Match. Aplica
+primer valor y patrones Host, valida los campos de conexión y conserva advertencias
+acotadas. `Profile.ssh_ignore_config` tiene valor anterior false por defecto y true
+para importados; tanto el lanzamiento inicial como sus canales usan `-F /dev/null`.
+La interfaz permite revisar el campo sin alterar perfiles existentes.
+
+`tunnels.rs` valida reglas tipadas y controla forward/check/cancel sobre el socket
+privado del ControlMaster. No hay shell remoto ni fallback a conexión nueva. La
+tarea mantiene estado, señal de cancelación y referencia a la conexión; destruir
+el manejador solicita detener un túnel activo. Los fallos sin acuse de apertura
+son desconocidos y no cancelan una regla externa automáticamente. La cancelación
+manual de un desconocido es una operación explícita. No hay reconexión ni reintento
+automático; se acotan mensajes y operaciones y se comprueba el master periódicamente.
+
+`ssh_tools_ui.rs` reutiliza el guardado privado de Config y el esquema Tunnel
+existente. Las definiciones y perfiles se guardan sin activar conexiones. El destino
+se valida por identidad de perfil incluso si GTK autoselecciona una fila. Las filas
+de resultados conservan el manejador mostrado para que cancelar no dependa de un
+índice que pueda cambiar al retirar resultados antiguos. El cierre de ventana
+oculta; el cierre de aplicación confirma y espera cancelaciones antes de destruir
+las conexiones. Los estados de ejecución no se serializan ni se reactivan al recuperar.
+
+### Intervenciones
+
+`interventions.rs` guarda contextos versionados independientes del historial de
+`execution.rs`. El bloqueo `flock`, las escrituras atómicas sincronizadas y la
+comparación del borrador esperado protegen frente a concurrencia y pérdida de la
+última copia válida. Los archivos se leen con límites, sin seguir enlaces ni
+bloquear en archivos especiales; las cuotas cuentan también temporales huérfanos.
+No existe un motor de repetición de acciones.
+
+`intervention_ui.rs` conserva objetivo, destinos, notas, exclusiones y borrador;
+la selección de contexto no vincula implícitamente otras acciones. La preparación
+vinculada abre `supervised_ui.rs`, que captura el contexto y la solicitud exacta
+para su revisión. Tras aprobar, se persiste propuesta/aprobación con UUID antes de
+llamar a `execution::start_with_id`. Si guardar falla, no se ejecuta; si se cierra
+el formulario antes del arranque, la aprobación puede quedar sin resultado confirmado.
+El historial conserva su formato y sigue siendo la fuente de estados y salidas.
+
+El informe comprueba UUID, especificación y destino de cada evidencia. Los registros
+ausentes o incompatibles no se sustituyen; la salida se limita a muestras señaladas.
+La vista previa editable se invalida al cambiar selección u opciones y el exportador
+crea un archivo 0600 sin reemplazar existentes. El JSON editado se valida antes de
+exportar. La redacción de secretos queda a cargo del usuario.
+
+El cierre normal fuerza el borrador pendiente. Las ventanas retenidas de intervención
+y ejecución supervisada se desvinculan y destruyen antes de su padre, evitando
+referencias transitorias inválidas en GTK 4.14. El diario de transferencias libera
+explícitamente su bloqueo al destruirse: un descriptor heredado por `fork` no puede
+prolongar la exclusión del propietario ya cerrado.
