@@ -34,6 +34,7 @@ smallvec = "1"
 anyhow = "1"
 tempfile = "3"
 bytes = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [build-dependencies]
 cc = "1"
