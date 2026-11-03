@@ -6,6 +6,35 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Primera versión del editor Markdown — 3 de noviembre de 2026
+
+- Rama `feat/markdown_viewer`, GTK4 nativo y pulldown-cmark 0.13.6 sin sus
+  características opcionales. MSRV declarado por el parser: Rust 1.71.1.
+- `cargo test --locked --jobs 1 -- --test-threads=1`: 134 aprobadas y siete
+  omitidas por requisitos de entorno; `cargo test --locked --no-default-features
+  --lib --jobs 1 -- --test-threads=1`: 82 aprobadas. Un intento paralelo previo
+  falló en la prueba existente de dictado silencioso; no se cambió esa prueba ni
+  su implementación. La ejecución completa en serie pasó.
+- `python3 lab/check_markdown.py`: prueba GTK expresa, clara/oscura, fuente con
+  Unicode y emoji, marcas ocultas, cambio de vista sin modificar el documento,
+  formato y deshacer, captura del borrador y conservación del texto escrito.
+  Galería de estilos: pulsar Título 2/Normal cambia el párrafo, actualiza la
+  selección visual y permite deshacer sin pérdida. Cinta agrupada con altura
+  acotada y ventana estrecha, sin obligar a ampliar la ventana.
+  El formulario de enlaces rechaza javascript y escapa espacios en la URL.
+  Las capturas se guardan en `artifacts/markdown-light.png` y
+  `artifacts/markdown-dark.png`; se inspeccionó el aspecto de ambas variantes.
+- `python3 lab/check_recovery.py`: ocho escenarios aprobados, incluidos SIGKILL,
+  restauración/guardado con etag, conflictos, originales ausentes, documento
+  remoto desconectado, descarte, cierre normal y fallo de almacenamiento.
+- Compilación debug, `py_compile` del laboratorio y `git diff --check`: correctos.
+
+Alcance: las pruebas del nuevo editor son GTK/X11 virtual en el equipo de
+construcción; no certifican todavía los nuevos flujos Markdown contra SSH real,
+Wayland ni las distribuciones empaquetadas. Las tablas e imágenes se insertan como
+Markdown, sin widgets visuales de celdas o previsualización. Visual se limita a
+256 KiB; los archivos mayores conservan la edición de texto del editor existente.
+
 ## Intervenciones y regresiones — 2 de noviembre de 2026
 
 - Rust 1.93.1, sin dependencias nuevas. `cargo test --locked --jobs 1`: 132

@@ -957,6 +957,29 @@ cargo test --locked --no-default-features
 Para una prueba breve de arranque con configuración aislada, consulta `docs/VALIDACION.md`.
 Las pruebas de escritorio remoto necesitan servidores de laboratorio; no se usan equipos de producción.
 
+## Editor Markdown visual
+
+Los archivos `.md` y `.markdown` abiertos en el editor integrado muestran una
+cinta nativa con Inicio, Insertar y Vista. Inicio organiza Portapapeles, Fuente,
+Párrafo, Estilos y Edición en grupos separados, con galería de títulos y cita,
+resaltado del estilo actual y acceso a copiar, cortar, pegar y seleccionar todo.
+En ventanas estrechas la cinta permite desplazamiento horizontal. Visual aplica títulos, negrita, cursiva,
+tachado, citas y código; Código muestra la fuente completa. Ambos modos editan el
+mismo documento, sin convertirlo a HTML. Guardar y recuperar incluyen las marcas
+ocultas y mantienen las comprobaciones habituales de conflictos y destinos SSH.
+
+Inicio incluye estilos, listas, tareas, deshacer/rehacer y formato de selección
+(Ctrl+B/Ctrl+I). Insertar permite introducir tablas y bloques Markdown y abrir un
+formulario para enlaces e imágenes. Vista ajusta el zoom. Los recursos no se
+abren ni se descargan automáticamente. Las tablas y las referencias de imágenes
+se editan actualmente como fuente; no hay todavía celdas ni imágenes incrustadas.
+La vista visual está acotada a 256 KiB; los documentos mayores siguen disponibles
+como texto dentro del límite general del editor. Las construcciones no interpretadas
+se conservan literalmente. No se pretende compatibilidad con documentos Word.
+
+Prueba gráfica: `python3 lab/check_markdown.py` (requiere Cargo, Xvfb y D-Bus).
+Diseño, alcance y siguientes mejoras en [MARKDOWN_EDITOR.md](docs/MARKDOWN_EDITOR.md).
+
 ## Documentación técnica
 
 - [Arquitectura y dependencias](docs/analysis/README.md): organización del código, herramientas externas y alcance pendiente.

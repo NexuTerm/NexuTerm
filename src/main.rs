@@ -1,3 +1,4 @@
+mod markdown_editor;
 mod askpass;
 mod context_menu;
 mod desktop_view;

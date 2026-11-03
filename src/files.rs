@@ -136,7 +136,8 @@ pub(crate) fn editor_document(
     let recovery = crate::recovery_ui::Tracker::attach(state, &root, &buffer, &status, source.clone(), recovered.as_ref().map(|d|d.id.clone()).or(document_id));
     recovery.set_base(recovered.as_ref().and_then(|d|d.base_text.clone()));
     crate::recovery_ui::bind_copy(&save_copy, window, &buffer, &status, source.basename());
-    crate::syntax::bind(&buffer, file.basename().unwrap_or_default());
+    let markdown = nexuterm::markdown::supported(std::path::Path::new(&source.basename()));
+    if !markdown { crate::syntax::bind(&buffer, file.basename().unwrap_or_default()); }
     state
         .documents
         .borrow_mut()
@@ -208,6 +209,7 @@ pub(crate) fn editor_document(
     body.append(&gutter);
     body.append(&scroll);
     root.append(&body);
+    if markdown { crate::markdown_editor::bind(&root, &text, &gutter); }
     let etag = Rc::new(RefCell::new(None::<String>));
     let busy = Rc::new(Cell::new(false));
     let loaded = Rc::new(Cell::new(false));
