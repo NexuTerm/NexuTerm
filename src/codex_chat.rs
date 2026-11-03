@@ -154,9 +154,10 @@ fn message(
     copy_response: bool,
 ) -> MessageLabel {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.add_css_class("card");
     if tool {
         card.add_css_class("workspace-tool");
+    } else {
+        card.add_css_class("card");
     }
     if copy_response {
         card.add_css_class("workspace-response");
@@ -183,7 +184,24 @@ fn message(
     if tool {
         text.add_css_class("monospace");
     }
-    if copy_response {
+    if tool {
+        // Keep the original heading for snapshots; the visible summary is one line.
+        heading.set_visible(false);
+        let summary_text = if title == "Ejecución de comando" { "Ejecutando comando".to_owned() }
+            else { title.split_whitespace().collect::<Vec<_>>().join(" ") };
+        let summary = gtk::Label::new(Some(&summary_text));
+        summary.set_xalign(0.0);
+        summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        summary.set_hexpand(true);
+        summary.add_css_class("dim-label");
+        let details = gtk::Expander::new(None);
+        details.set_widget_name("chat-tool-details");
+        details.set_label_widget(Some(&summary));
+        details.set_expanded(false);
+        details.set_child(Some(&text));
+        card.append(&heading);
+        card.append(&details);
+    } else if copy_response {
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         heading.set_hexpand(true);
         header.append(&heading);
@@ -203,7 +221,7 @@ fn message(
     } else {
         card.append(&heading);
     }
-    card.append(&text);
+    if !tool { card.append(&text); }
     list.append(&card);
     while list.observe_children().n_items() > 128 {
         if let Some(child) = list.first_child() {
@@ -374,6 +392,53 @@ fn tool_title(item: &Value) -> String {
 mod presentation_tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires Xvfb and a private D-Bus session"]
+    fn tool_details_start_collapsed_and_expand_without_losing_streamed_text() {
+        gtk::init().unwrap();
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let activity = message(&list, None, "Ejecución de comando", "printf prueba", true, false);
+        let card = list.first_child().unwrap();
+        assert!(!card.has_css_class("card"));
+        let original = card.first_child().unwrap().downcast::<gtk::Label>().unwrap();
+        assert_eq!(original.text(), "Ejecución de comando");
+        assert!(!original.is_visible());
+        let expander = card.last_child().unwrap().downcast::<gtk::Expander>().unwrap();
+        assert!(!expander.is_expanded());
+        assert_eq!(expander.child().unwrap(), activity.label.clone().upcast::<gtk::Widget>());
+        let summary = expander.label_widget().unwrap().downcast::<gtk::Label>().unwrap();
+        assert!(!summary.wraps());
+        assert_eq!(summary.ellipsize(), gtk::pango::EllipsizeMode::End);
+        activity.set_text("printf prueba\nprueba\nFinalizado: 0");
+        assert!(!expander.is_expanded());
+        expander.set_expanded(true);
+        assert!(expander.is_expanded());
+        assert!(activity.label.text().contains("Finalizado: 0"));
+        expander.set_expanded(false);
+        assert!(activity.label.is_selectable());
+        let response = message(&list, None, "Agente", "Respuesta visible", false, true);
+        assert!(response.label.is_visible());
+        assert!(list.last_child().unwrap().has_css_class("card"));
+        let window = gtk::Window::builder().default_width(680).default_height(280).child(&list).build();
+        window.present();
+        for expanded in [false, true] {
+            expander.set_expanded(expanded);
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            assert_eq!(activity.label.is_mapped(), expanded);
+            if let Some(directory) = std::env::var_os("NEXUTERM_TOOL_SCREENSHOTS") {
+                let paintable = gtk::WidgetPaintable::new(Some(&window));
+                let snapshot = gtk::Snapshot::new();
+                paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+                let node = snapshot.to_node().unwrap();
+                let path = PathBuf::from(directory).join(if expanded { "tools-expanded.png" } else { "tools-collapsed.png" });
+                window.renderer().unwrap().render_texture(&node, None).save_to_png(path).unwrap();
+            }
+        }
+        window.destroy();
+    }
     #[test]
     fn tool_activity_uses_human_labels_without_shell_prompt_artifacts() {
         let command = json!({
@@ -758,11 +823,19 @@ pub(super) fn build(state: &Rc<State>, process: &Rc<ai_panel::Process>, identifi
     history.append(&history_more);
     let list = gtk::Box::new(gtk::Orientation::Vertical, 12);
     crate::context_menu::conversation(&list);
+    let thinking = gtk::Label::new(Some("Pensando"));
+    thinking.set_widget_name("chat-thinking");
+    thinking.set_xalign(0.0);
+    thinking.add_css_class("dim-label");
+    thinking.set_visible(false);
+    let conversation = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    conversation.append(&list);
+    conversation.append(&thinking);
     let scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
         .overlay_scrolling(false)
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&list)
+        .child(&conversation)
         .build();
     let overlay = gtk::Overlay::new();
     scroll.set_widget_name("workspace-chat-scroll");
@@ -1114,6 +1187,7 @@ Puede solicitar permiso para leerlas.",
         let dialogs = dialogs.clone();
         let generation = generation.clone();
         let list = list.downgrade();
+        let thinking = thinking.downgrade();
         let input = composer.downgrade();
         let status = info.downgrade();
         let spinner = spinner.downgrade();
@@ -1233,6 +1307,7 @@ Puede solicitar permiso para leerlas.",
             let generations = generation.clone();
             let list = list.downgrade();
             let info = info.downgrade();
+            let thinking = thinking.clone();
             let spinner = spinner.downgrade();
             let send = send.downgrade();
             let browser = browser.downgrade();
@@ -1820,6 +1895,7 @@ Puede solicitar permiso para leerlas.",
                 if let Some(history)=history.upgrade(){history.set_sensitive(!client.busy() && !parked_recent);}
                 send.set_sensitive(ready && !client.busy() && !parked_recent && !awaiting_resume.get() && archive.ready());
                 if awaiting_resume.get() && let Some(retry)=retry.upgrade(){retry.set_sensitive(!client.busy());if !client.busy(){retry.set_label("Reintentar reanudación");}}
+                if let Some(thinking) = thinking.upgrade() { thinking.set_visible(client.busy()); }
                 spinner.set_visible(client.busy());
                 if client.busy() {
                     spinner.start();
@@ -1991,6 +2067,11 @@ Puede solicitar permiso para leerlas.",
             fn named(widget: &gtk::Widget, name: &str) -> Option<gtk::Label> {
                 if widget.widget_name() == name {
                     return widget.clone().downcast().ok();
+                }
+                if let Some(expander) = widget.downcast_ref::<gtk::Expander>() {
+                    if let Some(child) = expander.child() {
+                        if let Some(found) = named(&child, name) { return Some(found); }
+                    }
                 }
                 let mut child = widget.first_child();
                 while let Some(w) = child {

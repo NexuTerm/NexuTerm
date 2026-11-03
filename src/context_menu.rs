@@ -312,6 +312,10 @@ fn transcript(widget: &gtk::Widget, text: &mut String) {
     if widget.is::<gtk::Popover>() {
         return;
     }
+    if let Some(expander) = widget.downcast_ref::<gtk::Expander>() {
+        if let Some(child) = expander.child() { transcript(&child, text); }
+        return;
+    }
     if let Some(label) = widget.downcast_ref::<gtk::Label>() {
         text.push_str(&label.text());
         text.push('\n');

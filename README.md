@@ -526,6 +526,11 @@ descarte confirmado y bloqueo del cierre cuando falla el almacenamiento.
 
 ## Agentes de IA y chat
 
+La actividad de herramientas se muestra como una línea discreta, plegada por
+defecto. Pulsa la flecha o el texto para consultar el comando y su resultado;
+las actualizaciones no despliegan el detalle. Durante la espera aparece «Pensando».
+Plegar no elimina información del historial ni de las copias de recuperación.
+
 El botón **Agentes de IA** de la cabecera, el menú o **Ctrl+Mayús+I** abre una
 paleta lateral derecha redimensionable, independiente de las conexiones.
 En **Configurar agentes de IA** puedes añadir perfiles, editar el seleccionado o
