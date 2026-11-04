@@ -186,6 +186,7 @@ pub fn browser(root: &gtk::Box, list: &gtk::ListBox, can_copy: impl Fn() -> bool
             ),
             ("Nueva carpeta", "Nueva carpeta"),
             ("Nuevo archivo", "Nuevo archivo"),
+            ("Eliminar…", "Eliminar… (mover a la papelera)"),
             ("Subir", "Subir archivo"),
             ("Descargar", "Descargar archivo"),
         ] {

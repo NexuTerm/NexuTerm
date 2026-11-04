@@ -28,6 +28,10 @@ En **Preferencias → Navegador** puedes configurar las columnas Tipo, Tamaño y
 Permisos (Nombre siempre visible), si se muestran los ocultos al abrir, la
 visibilidad inicial del lateral y la aplicación para abrir archivos locales.
 Los cambios se guardan y se aplican a los paneles abiertos, locales y remotos.
+En el explorador local, **Eliminar…** está disponible en la barra y en el menú
+contextual. Mueve los archivos o carpetas seleccionados a la papelera después de
+confirmar. Si la papelera no está disponible, muestra el error y no realiza un
+borrado permanente.
 Los permisos se muestran como `rwxr-xr-x`, incluyendo setuid/setgid/sticky;
 si el servidor no los proporciona se muestra `—` en lugar de inventarlos.
 
