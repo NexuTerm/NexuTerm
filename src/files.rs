@@ -77,6 +77,7 @@ pub(crate) fn editor_document(
     let status = gtk::Label::new(Some("Cargando texto UTF-8 (máximo 8 MiB)…"));
     status.set_xalign(0.0);
     status.set_wrap(true);
+    status.connect_label_notify(|label| label.set_visible(!label.text().is_empty()));
     let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     toolbar.add_css_class("editor-toolbar");
     let badge = gtk::Label::new(Some("EDITOR / UTF-8"));
@@ -538,7 +539,7 @@ pub(crate) fn editor_document(
                     loaded.set(true);
                     status.set_text(if is_remote_origin && !is_recovered {
                         "UTF-8 · SFTP atómico con propietario/grupo/permisos POSIX; ACL y atributos extendidos no garantizados."
-                    } else if etag.borrow().is_some() { "UTF-8 · guardado con comprobación de versión" }
+                    } else if etag.borrow().is_some() { if markdown { "" } else { "UTF-8 · guardado con comprobación de versión" } }
                     else { "El servidor no aporta versión/etag: edición disponible, guardado deshabilitado para evitar sobrescrituras." });
                     if let Some(notice) = notice { status.set_text(notice); }
                     #[cfg(debug_assertions)]
