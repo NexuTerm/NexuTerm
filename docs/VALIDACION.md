@@ -6,6 +6,34 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Release 1.0.0 — 4 de noviembre de 2026
+
+- Base: `develop`, tras integrar `feat/markdown_viewer`. Versión sincronizada en
+  Cargo.toml/Cargo.lock; Acerca de utiliza `CARGO_PKG_VERSION`.
+- `cargo test --locked --jobs 1 -- --test-threads=1`: 138 aprobadas y ocho omitidas
+  por requisitos de entorno. `python3 -m unittest discover -s tests -p
+  test_release.py`: cinco pruebas de empaquetado aprobadas.
+- `python3 lab/check_markdown.py` y `python3 lab/check_markdown_media.py`:
+  aprobados en claro/oscuro; selector nativo, fidelidad de fuente, deshacer,
+  tablas, imágenes y cancelación HTTP. GTK/X11 virtual, no Wayland.
+- `cargo build --locked --release --jobs 2`: correcto con Rust 1.93.1 en Ubuntu
+  26.04.1 LTS; GTK 4.22.4, libadwaita 1.9.1, VTE 0.84.0.
+- `python3 packaging/release.py deb --binary target/release/nexuterm --output-dir
+  dist/1.0.0`: paquete amd64 1.0.0 generado. `dpkg-shlibdeps` advirtió de las
+  diversiones del cargador de libc6 en el sistema constructor. Se revisó Depends,
+  se comprobó el enlace con `packaging/release.py check` y no faltan bibliotecas.
+- Paquete extraído sin instalarlo en el equipo: ELF idéntico al binario release y
+  arranque X11 durante cuatro segundos con HOME/configuración/datos temporales.
+  Esto no acredita instalación APT, actualización ni compatibilidad en otra distribución.
+- SHA-256 del paquete en `SHA256SUMS`; hashes sin firma. Enlaces locales de los
+  documentos revisados y `git diff --check` correctos.
+
+La matriz Ubuntu 24.04/Debian 13 que figura abajo corresponde a entregas anteriores;
+no se ha repetido para 1.0.0. Tampoco se ha completado la aceptación humana de
+[ACEPTACION.md](ACEPTACION.md), la interacción gráfica de la papelera ni las
+cuentas reales de todos los proveedores. Estas limitaciones se publican en las
+[notas de la versión](RELEASE_1.0.0.md).
+
 ## Tablas e imágenes Markdown — 4 de noviembre de 2026
 
 - `cargo test --locked --jobs 1 -- --test-threads=1`: 138 aprobadas y ocho

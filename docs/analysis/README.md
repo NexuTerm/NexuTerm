@@ -1,6 +1,6 @@
 # Documentación técnica de NexuTerm
 
-Revisión documental: 26 de octubre de 2026. Describe el proyecto Rust/Linux
+Revisión documental: 4 de noviembre de 2026 — versión 1.0.0. Describe el proyecto Rust/Linux
 actual a partir de sus fuentes y configuración.
 
 - [Arquitectura](ARQUITECTURA.md): plataforma, módulos, conexiones y persistencia.

@@ -1,6 +1,6 @@
 # Alcance y trabajo pendiente de NexuTerm
 
-Revisión documental: 26 de octubre de 2026. Esta lista distingue funciones
+Revisión documental: 4 de noviembre de 2026 — versión 1.0.0. Esta lista distingue funciones
 documentadas de ampliaciones pendientes; no implica fechas ni aprobación para
 implementar nuevas funciones.
 
@@ -14,12 +14,13 @@ realizadas, sus entornos y sus limitaciones.
 
 ## Límites y ampliaciones pendientes
 
-- Conectar a la interfaz las ampliaciones de ejecución simultánea, túneles y
-  métricas que aún no están disponibles como funciones aceptadas.
-- Macros, comparación de archivos, Mosh, conexiones serie, servidores auxiliares
-  e importación de perfiles de otras aplicaciones no están implementados.
-- El explorador transfiere archivos individuales; no replica árboles completos.
-  La cancelación puede dejar un destino parcial.
+- Ampliar la ejecución simultánea general y las métricas continuas. Los túneles
+  SSH y la ejecución supervisada ya tienen interfaz.
+- Macros, Mosh, conexiones serie y servidores auxiliares no están implementados.
+  La comparación de versiones y la importación estática de OpenSSH sí están disponibles.
+- La cola de transferencias admite árboles de carpetas, pausa, cancelación y
+  reintento desde el inicio de cada archivo, sin sobrescribir destinos existentes.
+  No es sincronización bidireccional ni reanudación por offset de un archivo parcial.
 - El editor acepta texto UTF-8 hasta 8 MiB. La edición remota detecta conflictos,
   pero no bloquea escrituras de otros clientes durante la subida.
 - RDP/VNC todavía requieren ampliar la validación de servidores, teclado y

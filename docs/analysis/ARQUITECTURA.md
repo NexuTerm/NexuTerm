@@ -1,6 +1,6 @@
 # Arquitectura de NexuTerm
 
-Revisión documental: 26 de octubre de 2026. Basada en el código del checkout;
+Revisión documental: 4 de noviembre de 2026 — versión 1.0.0. Basada en el código del checkout;
 no constituye una prueba de ejecución ni de compatibilidad con servidores reales.
 
 ## Plataforma
@@ -20,7 +20,7 @@ compilación también requiere LibVNCClient por el puente C de `build.rs`.
 | Terminal | `ssh.rs`, `terminal_colors.rs` | OpenSSH, socket de control y paletas VTE |
 | Archivos | `file_browser.rs`, `remote_panel.rs`, `transfer.rs`, `sftp_session.rs` | Navegación local/remota y SFTP |
 | FTP | `ftp.rs`, `ftp_transfer.rs`, `ftp_legacy.rs` | Integración GVfs y compatibilidad Windows CE mediante curl |
-| Editor | `files.rs`, `remote_edit.rs`, `syntax.rs` | Texto UTF-8, conflictos y resaltado sintáctico |
+| Editor | `files.rs`, `remote_edit.rs`, `syntax.rs`, `markdown*.rs` | Texto UTF-8, conflictos y resaltado sintáctico |
 | Escritorio remoto | `desktop.rs`, `desktop_view.rs`, `rdp.rs`, `vnc.rs`, `vnc_bridge.c` | RDP con IronRDP y VNC con LibVNCClient |
 | Agentes | `ai_panel.rs`, `ai_chat.rs`, `codex_chat.rs`, `ai_settings.rs`, `ai_config.rs` | Chat gráfico y configuración de proveedores |
 | Integración de agentes | `codex.rs`, `agent_profile.rs`, `agent_runtime.rs`, `terminal_mcp.rs`, `ai_terminals.rs` | Transportes, perfiles privados y acceso autorizado a terminales |

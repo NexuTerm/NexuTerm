@@ -1,7 +1,7 @@
 # Hoja de ruta del informe de mejoras
 
-Acuerdo de trabajo: primero publicar los cambios pendientes y después comenzar
-la implementación por fases. Se mantiene Rust/GTK, los backends existentes y la
+Historial de implementación incorporado a 1.0.0. El alcance distribuido y sus
+límites se describen en [RELEASE_1.0.0.md](RELEASE_1.0.0.md). Se mantiene Rust/GTK, los backends existentes y la
 autenticación y aprobaciones actuales, sin servicios externos nuevos.
 
 ## Entrega inicial: espacios de trabajo

@@ -158,7 +158,7 @@ pub(super) fn install_actions(
                         .modal(true)
                         .destroy_with_parent(true)
                         .program_name("NexuTerm")
-                        .version("0.2.0 · en desarrollo")
+                        .version(env!("CARGO_PKG_VERSION"))
                         .comments("Terminal y conexiones remotas para Linux")
                         .logo_icon_name("io.nexuterm.NexuTerm")
                         .build();

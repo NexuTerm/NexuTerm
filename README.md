@@ -1,9 +1,11 @@
 # NexuTerm
 
 Aplicación Rust para Linux con terminal por pestañas y conexiones SSH, SFTP, Telnet, FTP, RDP y VNC.
-Versión 0.2.0 en desarrollo. Consulta los límites conocidos y las comprobaciones de validación antes de distribuirla.
+Versión **1.0.0**, primera release pública para Linux. Consulta las
+[notas de la versión](docs/RELEASE_1.0.0.md), los [cambios](CHANGELOG.md) y los
+[límites conocidos](#límites-conocidos) antes de instalar.
 
-## Primera versión
+## Funciones de la versión 1.0.0
 
 - Interfaz GNOME con libadwaita: cabecera, barra de iconos con nombres accesibles, menú de acciones y pestañas compactas y reordenables.
 - Menús contextuales con clic derecho o Mayús+F10: abrir, copiar/pegar y operaciones básicas en los exploradores; copiar, pegar, seleccionar y buscar en terminales locales y remotas; copiar selección, mensaje o conversación en los chats de IA. El cuadro de escritura conserva el menú nativo de edición de GTK.
@@ -778,18 +780,22 @@ VNC usa directamente LibVNCClient; el paquete de release incluye su dependencia 
 GTK/VTE y sus paquetes de desarrollo tienen nombres distintos en otras distribuciones.
 
 ```bash
-cd ~/source/NexuTerm
-~/.cargo/bin/cargo build --locked
-~/.cargo/bin/cargo run --locked
+git clone https://github.com/NexuTerm/NexuTerm.git
+cd NexuTerm
+git checkout v1.0.0
+cargo build --locked
+cargo run --locked
 ```
 
-Rust se instaló a nivel de usuario sin modificar el PATH del shell. Si `cargo` ya está en tu PATH, puedes usarlo directamente.
-Para otras máquinas, instala Rust desde [rust-lang.org](https://rust-lang.org/tools/install/).
+Instala Rust y asegúrate de tener `cargo` en `PATH`. Consulta [rust-lang.org](https://rust-lang.org/tools/install/).
 
 ### Instalación en el escritorio Linux
 
-La distribución recomendada para Debian/Ubuntu es un paquete `.deb` con sus
-dependencias declaradas. Prepararlo requiere Python >= 3.11, `dpkg-dev` y `binutils`:
+Las fuentes de 1.0.0 se publican en [GitHub Releases](https://github.com/NexuTerm/NexuTerm/releases/tag/v1.0.0).
+La distribución para Debian/Ubuntu utiliza un paquete `.deb` con dependencias
+declaradas. Comprueba la distribución de construcción y los requisitos de cada
+paquete en las notas de la versión; un binario de una distribución reciente no
+equivale a un paquete compatible con Ubuntu 24.04 o Debian 13. Prepararlo requiere Python >= 3.11, `dpkg-dev` y `binutils`:
 
 ```bash
 sudo apt install python3 dpkg-dev binutils
@@ -912,10 +918,10 @@ una copia; descartar expresamente el documento retira también su borrador.
 
 ## Límites conocidos
 
-- La ampliación profesional sigue incompleta: ejecución simultánea, gestor de túneles, panel de métricas, todavía no están conectados a la interfaz. Los módulos de backend en desarrollo no equivalen a funciones aceptadas.
+- La ejecución supervisada y los túneles SSH están integrados. La ejecución simultánea general y un panel de métricas continuo quedan fuera del alcance de 1.0.0.
 - RDP y VNC se ajustan al área de la pestaña sin cambiar la resolución del servidor. No hay aún sincronización de portapapeles, audio ni configuración de certificados VNC personalizados. La compatibilidad con todos los servidores reales no está comprobada.
 - La UI cubre conexiones básicas; no expone todas las opciones de gateway, multimonitor, impresión, smartcard, codecs o TLS de los protocolos de escritorio remoto.
-- No se han implementado macros, diff, túneles configurables, Mosh, serie, servidores auxiliares ni importación de perfiles de otras aplicaciones.
+- No se han implementado macros, Mosh, conexiones serie ni servidores auxiliares. La importación de perfiles está limitada al subconjunto OpenSSH descrito arriba; la comparación de versiones está integrada en el editor.
 - El explorador admite selección múltiple (hasta 128 elementos) y árboles de hasta 512 operaciones/32 niveles; no sigue enlaces ni acepta archivos especiales. La cola es compartida por destino, privada y persistente (512 entradas, 4 MiB de estado). Al recuperar una cola no se conecta ni transfiere hasta pulsar Iniciar. Pausar espera al archivo actual; reintentar comienza ese archivo desde cero. SFTP publica sin sobrescribir mediante temporales privados y enlaces exclusivos cuando el servidor los admite; sin soporte de enlace remoto, una subida interrumpida puede dejar un destino parcial. Las descargas locales usan temporal y publicación exclusiva. FTP comprueba previamente la ausencia del destino, pero el protocolo no garantiza exclusión frente a otros clientes y una interrupción puede dejar un archivo remoto parcial que debe revisarse. FTP Windows CE conserva transferencias individuales; los árboles no están soportados. SFTP usa bloques de 64 KiB y páginas de 200 entradas; los listados Windows CE se acotan a 8 MiB.
 - El editor solo acepta UTF-8; no abre binarios ni archivos mayores de 8 MiB. En la edición local no guarda cuando el backend no ofrece etag; el guardado remoto SSH/SFTP utiliza la comprobación de contenido descrita arriba. El resaltado se procesa en segundo plano y está acotado al primer MiB y 65.536 segmentos de estilo; el resto sigue siendo editable como texto. Es resaltado sintáctico, sin análisis semántico ni servidor de lenguaje.
 - Las contraseñas FTP se guardan opcionalmente con Secret Service (llavero del escritorio); el JSON solo contiene una referencia. Sin llavero disponible, desmarca **Guardar contraseña en el llavero** para conservarla únicamente durante esta ejecución. Un campo de contraseña vacío conserva la anterior si servidor, puerto y usuario no cambian. FTP entrega la contraseña directamente a GVfs; las subidas FTP y la compatibilidad con Windows CE utilizan curl sin abrir una consola y transmite la credencial por una tubería privada, sin archivos temporales ni argumentos del proceso. Las transferencias no sobrescriben archivos existentes. No se debilita la validación de certificados ni de host keys.

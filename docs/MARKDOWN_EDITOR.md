@@ -1,6 +1,6 @@
-# Editor Markdown visual — implementación inicial y siguientes pasos
+# Editor Markdown visual — versión 1.0.0
 
-Rama: `feat/markdown_viewer`. Referencia inspeccionada: pluMd 0.2.5 en
+Integrado en la versión 1.0.0. Referencia inspeccionada: pluMd 0.2.5 en
 `/home/mjulia/source/pluMd`. Se ha implementado una primera versión nativa: parser CommonMark/GFM con rangos,
 vistas Visual/Código, cinta Inicio/Insertar/Vista, formato, listas, deshacer/rehacer,
 zoom, formularios para referencias, celdas editables y vistas previas de imágenes.
