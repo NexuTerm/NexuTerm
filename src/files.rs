@@ -209,7 +209,6 @@ pub(crate) fn editor_document(
     body.append(&gutter);
     body.append(&scroll);
     root.append(&body);
-    if markdown { crate::markdown_editor::bind(&root, &text, &gutter); }
     let etag = Rc::new(RefCell::new(None::<String>));
     let busy = Rc::new(Cell::new(false));
     let loaded = Rc::new(Cell::new(false));
@@ -238,6 +237,14 @@ pub(crate) fn editor_document(
     let target = page.downgrade();
     let current_file = Rc::new(RefCell::new(file.clone()));
     let current_remote = Rc::new(RefCell::new(remote));
+    if markdown {
+        let base = match &source {
+            nexuterm::recovery::Source::Local { path, .. } => path.parent().map(std::path::Path::to_owned),
+            _ => None,
+        };
+        crate::markdown_editor::bind(&root, &text, &gutter, base, Some(current_remote.clone()));
+    }
+
     if let Some(bind) = bind_remote {
         let s = Rc::downgrade(state);
         let remote = current_remote.clone(); let file = current_file.clone(); let tag = etag.clone();

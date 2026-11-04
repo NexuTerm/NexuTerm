@@ -3,7 +3,51 @@ use gtk::{glib, prelude::*};
 use nexuterm::markdown::{self, Style};
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+// Table entries edit their own source range; inline commands must follow their focus.
+fn focused_cell(view: &gtk::TextView) -> Option<gtk::Entry> {
+    let mut focus = view
+        .root()?
+        .downcast::<gtk::Window>()
+        .ok()
+        .and_then(|w| gtk::prelude::GtkWindowExt::focus(&w));
+    while let Some(widget) = focus {
+        if widget.widget_name().starts_with("md-cell-") {
+            return widget.downcast::<gtk::Entry>().ok();
+        }
+        focus = widget.parent();
+    }
+    None
+}
 fn wrap(view: &gtk::TextView, before: &str, after: &str) {
+    if let Some(entry) = focused_cell(view) {
+        let (a, z) = entry
+            .selection_bounds()
+            .unwrap_or((entry.position(), entry.position()));
+        if before.contains('\n') || after.contains('\n') {
+            return;
+        }
+        let text = entry.text().to_string();
+        let chars: Vec<_> = text.chars().collect();
+        let (a, z) = (a.min(z) as usize, a.max(z) as usize);
+        let selected: String = chars[a..z].iter().collect();
+        let replacement = if selected.starts_with(before)
+            && selected.ends_with(after)
+            && selected.len() >= before.len() + after.len()
+        {
+            selected[before.len()..selected.len() - after.len()].to_owned()
+        } else {
+            format!("{before}{selected}{after}")
+        };
+        let value = format!(
+            "{}{}{}",
+            chars[..a].iter().collect::<String>(),
+            replacement,
+            chars[z..].iter().collect::<String>()
+        );
+        entry.set_text(&value);
+        entry.select_region(a as i32, (a + replacement.chars().count()) as i32);
+        return;
+    }
     if !view.is_editable() {
         return;
     }
@@ -77,6 +121,9 @@ fn wrap(view: &gtk::TextView, before: &str, after: &str) {
     });
 }
 fn prefix(view: &gtk::TextView, prefix: &str) {
+    if focused_cell(view).is_some() {
+        return;
+    }
     if !view.is_editable() {
         return;
     }
@@ -138,6 +185,9 @@ fn prefix(view: &gtk::TextView, prefix: &str) {
     view.grab_focus();
 }
 fn reference(view: &gtk::TextView, image: bool) {
+    if focused_cell(view).is_some() {
+        return;
+    }
     if !view.is_editable() {
         return;
     }
@@ -261,7 +311,15 @@ fn ribbon_css() {
         }
     });
 }
-pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
+pub fn bind(
+    root: &gtk::Box,
+    view: &gtk::TextView,
+    gutter: &gtk::DrawingArea,
+    document_base: Option<std::path::PathBuf>,
+    remote: Option<
+        Rc<std::cell::RefCell<Option<std::sync::Arc<nexuterm::remote_edit::RemoteDocument>>>>,
+    >,
+) {
     view.set_widget_name("markdown-editor");
     view.buffer().set_enable_undo(true);
     view.buffer().set_max_undo_levels(200);
@@ -296,7 +354,7 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
     navigation.append(&mode);
     ribbon.append(&navigation);
     ribbon.append(&panels);
-    mode.set_tooltip_text(Some("Alternar edición visual y código Markdown. Vista visual hasta 256 KiB; tablas e imágenes se conservan como fuente."));
+    mode.set_tooltip_text(Some("Alternar edición visual y código Markdown. Vista visual hasta 256 KiB; tablas editables y vistas previas de imágenes; Código conserva la fuente completa."));
     root.insert_child_after(&ribbon, Some(&root.first_child().unwrap()));
     // Clipboard: large Paste with two compact actions alongside it.
     let clipboard = ribbon_group(&tools, "Portapapeles");
@@ -306,23 +364,48 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
     icon.set_pixel_size(24);
     paste_body.append(&icon);
     paste_body.append(&gtk::Label::new(Some("Pegar")));
+    paste.set_widget_name("md-paste");
     paste.set_child(Some(&paste_body));
     clipboard.append(&paste);
     let weak = view.downgrade();
     paste.connect_clicked(move |_| {
         if let Some(v) = weak.upgrade() {
-            v.emit_paste_clipboard();
+            if let Some(entry) = focused_cell(&v) {
+                if let Some(text) = entry
+                    .delegate()
+                    .and_then(|d| d.downcast::<gtk::Text>().ok())
+                {
+                    let _ = text.activate_action("clipboard.paste", None);
+                }
+            } else {
+                v.emit_paste_clipboard();
+            }
         }
     });
     let clip_small = gtk::Box::new(gtk::Orientation::Vertical, 0);
     clipboard.append(&clip_small);
     for (label, cut) in [("✂  Cortar", true), ("▣  Copiar", false)] {
         let button = ribbon_button(label, label);
+        button.set_widget_name(if cut { "md-cut" } else { "md-copy" });
         clip_small.append(&button);
         let weak = view.downgrade();
         button.connect_clicked(move |_| {
             if let Some(v) = weak.upgrade() {
-                if cut {
+                if let Some(entry) = focused_cell(&v) {
+                    if let Some(text) = entry
+                        .delegate()
+                        .and_then(|d| d.downcast::<gtk::Text>().ok())
+                    {
+                        let _ = text.activate_action(
+                            if cut {
+                                "clipboard.cut"
+                            } else {
+                                "clipboard.copy"
+                            },
+                            None,
+                        );
+                    }
+                } else if cut {
                     v.emit_cut_clipboard();
                 } else {
                     v.emit_copy_clipboard();
@@ -494,8 +577,12 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
     let weak = view.downgrade();
     select.connect_clicked(move |_| {
         if let Some(v) = weak.upgrade() {
-            v.grab_focus();
-            v.emit_select_all(true);
+            if let Some(entry) = focused_cell(&v) {
+                entry.select_region(0, -1);
+            } else {
+                v.grab_focus();
+                v.emit_select_all(true);
+            }
         }
     });
     let insert_group = ribbon_group(&insert, "Elementos del documento");
@@ -636,11 +723,41 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
     .into_iter()
     .chain(headings.iter().cloned())
     .collect();
+    let media = crate::markdown_media_ui::Media::new(view, document_base, remote);
+    let suspended = Rc::downgrade(&media);
+    view.connect_unrealize(move |_| {
+        if let Some(m) = suspended.upgrade() {
+            m.pause();
+        }
+    });
+    let resumed = Rc::downgrade(&media);
+    let render = dirty.clone();
+    view.connect_realize(move |_| {
+        if let Some(m) = resumed.upgrade() {
+            m.resume();
+            render.set(true);
+        }
+    });
+    let position = Rc::downgrade(&media);
+    view.add_tick_callback(move |_, _| {
+        if let Some(m) = position.upgrade() {
+            m.position();
+            glib::ControlFlow::Continue
+        } else {
+            glib::ControlFlow::Break
+        }
+    });
     let running = Rc::new(Cell::new(false));
     glib::timeout_add_local(Duration::from_millis(180), move || {
         let (Some(view), Some(mode)) = (weak.upgrade(), mode.upgrade()) else {
             return glib::ControlFlow::Break;
         };
+        if !view.is_realized() {
+            return glib::ControlFlow::Continue;
+        }
+        if mode.is_active() && media.editing() {
+            return glib::ControlFlow::Continue;
+        }
         if running.get() || !dirty.replace(false) {
             return glib::ControlFlow::Continue;
         }
@@ -651,13 +768,16 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
             buffer.remove_tag(tag, &start, &end);
         }
         if !mode.is_active() {
+            media.clear();
             return glib::ControlFlow::Continue;
         }
         if buffer.char_count() > 262144 {
+            media.clear();
             return glib::ControlFlow::Continue;
         }
         let source = buffer.text(&start, &end, true).to_string();
         if source.len() > 262144 {
+            media.clear();
             return glib::ControlFlow::Continue;
         }
         buffer.apply_tag(&base, &start, &end);
@@ -675,23 +795,25 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
             quote.clone(),
             headings.clone(),
         );
+        let media = media.clone();
         running.set(true);
         glib::spawn_future_local(async move {
             let parsed = nexuterm::runtime::runtime()
                 .spawn_blocking(move || {
                     let spans = markdown::spans(&source);
                     let map = markdown::offsets(&source);
-                    (spans, map)
+                    let blocks = nexuterm::markdown_media::blocks(&source);
+                    (spans, map, blocks)
                 })
                 .await;
             running.set(false);
             let (Some(view), Some(mode)) = (weak.upgrade(), mode.upgrade()) else {
                 return;
             };
-            if dirty.get() || !mode.is_active() {
+            if dirty.get() || !mode.is_active() || !view.is_realized() {
                 return;
             }
-            let Ok((spans, map)) = parsed else {
+            let Ok((spans, map, blocks)) = parsed else {
                 return;
             };
             let buffer = view.buffer();
@@ -712,6 +834,7 @@ pub fn bind(root: &gtk::Box, view: &gtk::TextView, gutter: &gtk::DrawingArea) {
                     &buffer.iter_at_offset(map[span.range.end]),
                 );
             }
+            media.sync(blocks, &map);
         });
         glib::ControlFlow::Continue
     });
@@ -756,7 +879,7 @@ mod tests {
         let view = gtk::TextView::new();
         let gutter = gtk::DrawingArea::new();
         root.append(&view);
-        bind(&root, &view, &gutter);
+        bind(&root, &view, &gutter, None, None);
         let buffer = view.buffer();
         prefix(&view, "# ");
         assert_eq!(crate::recovery_ui::snapshot(&buffer).unwrap(), "# ");

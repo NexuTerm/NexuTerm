@@ -32,7 +32,8 @@ def main():
         env = dict(os.environ, NEXUTERM_REMOTE_FIXTURE_ROOT=directory,
                    NEXUTERM_REMOTE_FIXTURE_PORT=str(port), NEXUTERM_REMOTE_FIXTURE_USER=getpass.getuser())
         with (base / "sshd.log").open("w+") as log:
-            server = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log)
+            server = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log,
+                                      start_new_session=True)
             try:
                 for _ in range(40):
                     if server.poll() is not None:

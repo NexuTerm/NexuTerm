@@ -970,14 +970,21 @@ ocultas y mantienen las comprobaciones habituales de conflictos y destinos SSH.
 
 Inicio incluye estilos, listas, tareas, deshacer/rehacer y formato de selección
 (Ctrl+B/Ctrl+I). Insertar permite introducir tablas y bloques Markdown y abrir un
-formulario para enlaces e imágenes. Vista ajusta el zoom. Los recursos no se
-abren ni se descargan automáticamente. Las tablas y las referencias de imágenes
-se editan actualmente como fuente; no hay todavía celdas ni imágenes incrustadas.
+formulario para enlaces e imágenes. Vista ajusta el zoom. Las tablas GFM ofrecen
+celdas editables y botones para añadir/eliminar la última fila o columna, con
+deshacer y conservación de la alineación. Las imágenes PNG, JPEG y WebP en una
+línea independiente tienen vista previa. Se cargan automáticamente las imágenes
+locales dentro de la carpeta del documento; las externas y HTTP/HTTPS requieren
+pulsar **Cargar**, cuyo tooltip muestra la referencia. En documentos SSH se usa
+solo la sesión ya vinculada y mediante una acción expresa. No se ejecutan SVG ni
+HTML. Cada imagen admite hasta 4 MiB y cuatro millones de píxeles; HTTP utiliza
+`curl` con tiempo y redirecciones acotados. Cerrar el editor cancela las descargas.
 La vista visual está acotada a 256 KiB; los documentos mayores siguen disponibles
 como texto dentro del límite general del editor. Las construcciones no interpretadas
 se conservan literalmente. No se pretende compatibilidad con documentos Word.
 
-Prueba gráfica: `python3 lab/check_markdown.py` (requiere Cargo, Xvfb y D-Bus).
+Pruebas gráficas: `python3 lab/check_markdown.py` y `python3 lab/check_markdown_media.py`
+(requieren Cargo, Xvfb, D-Bus y `curl` para HTTP).
 Diseño, alcance y siguientes mejoras en [MARKDOWN_EDITOR.md](docs/MARKDOWN_EDITOR.md).
 
 ## Documentación técnica

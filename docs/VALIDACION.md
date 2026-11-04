@@ -6,6 +6,39 @@ el checkout actual. Las implementaciones sustituidas se mantienen como historial
 Consulta el [README](../README.md) para el uso y los límites actuales y la
 [documentación técnica](analysis/README.md) para la organización del código.
 
+## Tablas e imágenes Markdown — 4 de noviembre de 2026
+
+- `cargo test --locked --jobs 1 -- --test-threads=1`: 138 aprobadas y ocho
+  omitidas por requisitos de entorno. `cargo test --locked --no-default-features
+  --lib --jobs 1 -- --test-threads=1`: 86 aprobadas. Compilación debug correcta.
+- `python3 lab/check_markdown_media.py`: GTK claro/oscuro; fuente original y
+  estado modificado intactos al renderizar; edición inmediata de celdas, escape
+  de `|`, negrita y copia desde la cinta, añadir filas, añadir/quitar columnas,
+  alineación, deshacer exacto y rechazo de callbacks de vistas sustituidas.
+  Alternancia Visual/Código, imagen local, ausencia de solapamientos y ventana
+  de 520 px sin desbordamiento del bloque. Capturas de ambas variantes en
+  `artifacts/markdown-media-{light,dark}.png` y `.narrow.png`, inspeccionadas.
+- El mismo laboratorio HTTP de loopback verifica una sola petición tras pulsar
+  Cargar, 404, exceso de tamaño con/sin Content-Length, rechazo de redirección a
+  file y cierre de la conexión lenta al destruir la ventana.
+- `python3 lab/check_markdown.py`: regresión GTK clara/oscura aprobada.
+- `python3 lab/check_recovery.py`: ocho escenarios aprobados, incluidos SIGKILL,
+  restauración, conflictos, original ausente, remoto desconectado y cierre seguro.
+- `python3 lab/check_remote_editor.py`: lectura binaria SFTP de imagen relativa
+  con espacios y rechazo por tamaño aprobados contra sshd desechable; también
+  pasan sus regresiones de guardado, conflictos, herramientas SSH, recuperación
+  y espacios de trabajo. Esta prueba de imagen cubre el backend SFTP; la
+  previsualización GTK se verifica con imágenes locales y HTTP. La primera
+  ejecución terminó con SIGTERM durante la limpieza, después de sus PASS; se
+  aisló el sshd del laboratorio con `start_new_session=True` y la repetición
+  completa finalizó con código 0.
+- `python3 -m py_compile lab/check_markdown_media.py` y `git diff --check`:
+  correctos; revisión de patrones de credenciales sin coincidencias.
+
+Límites: GTK/X11 virtual, sin aceptación Wayland ni paquetes de distribución.
+Las imágenes en línea, SVG y tablas fuera de los límites visuales se conservan
+como fuente; no se certifica equivalencia con un procesador de textos completo.
+
 ## Primera versión del editor Markdown — 3 de noviembre de 2026
 
 - Rama `feat/markdown_viewer`, GTK4 nativo y pulldown-cmark 0.13.6 sin sus

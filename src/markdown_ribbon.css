@@ -16,3 +16,6 @@
 .markdown-ribbon .md-style-4, .markdown-ribbon .md-style-5 { font-weight: bold; }
 .markdown-ribbon .md-style-6 { opacity: 0.7; }
 .markdown-ribbon .md-style-7 { font-style: italic; }
+.md-media-block { background: @theme_base_color; border: 1px solid alpha(currentColor, 0.20); padding: 3px; }
+.md-table-cell { border: 1px solid alpha(currentColor, 0.18); border-radius: 0; min-height: 28px; padding: 1px 6px; background: transparent; }
+.md-table-heading { font-weight: bold; background: alpha(currentColor, 0.055); }

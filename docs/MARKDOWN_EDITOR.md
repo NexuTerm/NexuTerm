@@ -3,8 +3,8 @@
 Rama: `feat/markdown_viewer`. Referencia inspeccionada: pluMd 0.2.5 en
 `/home/mjulia/source/pluMd`. Se ha implementado una primera versión nativa: parser CommonMark/GFM con rangos,
 vistas Visual/Código, cinta Inicio/Insertar/Vista, formato, listas, deshacer/rehacer,
-zoom y formularios para referencias. No incluye aún widgets de celdas o imágenes,
-ni equivalencia completa con PluMd. El orden siguiente conserva el diseño y los
+zoom, formularios para referencias, celdas editables y vistas previas de imágenes.
+No implica equivalencia completa con PluMd. El orden siguiente conserva el diseño y los
 criterios pendientes para ampliar esta base.
 
 ## Hallazgos de la revisión
@@ -73,3 +73,42 @@ El núcleo nativo evita introducir Electron y un segundo entorno de ejecución. 
 compatible con el mínimo Rust 1.92 del proyecto. No se ejecuta HTML del documento.
 El parseo está limitado a 256 KiB y 65536 rangos, fuera del hilo GTK, con un trabajo
 por documento; los demás archivos siguen siendo editables como texto.
+
+## Tablas e imágenes nativas
+
+Los widgets se superponen sobre rangos del TextBuffer; no añaden caracteres de
+objeto ni un segundo documento. Editar una celda actualiza inmediatamente su
+rango Markdown, incluso antes del siguiente ciclo GTK; guardar y recuperar
+siguen usando el mismo buffer. Se escapan las barras verticales nuevas. Los
+cambios de estructura conservan los contenidos y alineaciones GFM y se deshacen
+como una acción. La normalización de espacios solo afecta a una tabla cuya
+estructura se modifica expresamente. Las celdas muestran su sintaxis Markdown;
+la cinta admite negrita, cursiva, tachado y código en la selección de una celda.
+Los estilos de párrafo e inserciones de bloques se aplican fuera de las celdas.
+
+Límites por documento: 16 bloques visuales y 256 celdas; cada tabla admite hasta
+32 filas y 12 columnas. Una celda admite 1024 caracteres y 4096 bytes. Las tablas
+que exceden estos límites siguen como texto; no se truncan. Las imágenes en línea
+junto a otro texto conservan su referencia literal. Código permite editar toda
+la sintaxis y cualquier construcción no cubierta por los widgets.
+
+Las imágenes locales se resuelven respecto al documento. La carga automática
+queda dentro de su carpeta, comprobando también los enlaces simbólicos; fuera
+de ella requiere Cargar. HTTP/HTTPS y las rutas SSH siempre requieren pulsar
+Cargar. SSH utiliza el destino autenticado que ya tiene vinculado el documento,
+no la ruta temporal local ni una conexión nueva. Se rechazan credenciales en URL,
+SVG, HTML y otros esquemas. El original nunca se modifica. `curl` es necesario
+para HTTP, con redirecciones limitadas a HTTP/HTTPS y límites de tamaño y tiempo.
+
+El límite es 4 MiB y cuatro millones de píxeles por imagen, con vistas previas
+escaladas, dos trabajos simultáneos y una caché de ocho texturas por documento.
+Cerrar la vista cancela las solicitudes HTTP/SSH; las lecturas y decodificaciones
+locales en curso terminan de forma acotada fuera del hilo GTK. La autorización de
+carga externa no se persiste ni se reutiliza tras cerrar el documento.
+
+`python3 lab/check_markdown_media.py` ejecuta GTK en claro/oscuro y un servidor
+HTTP exclusivamente de loopback. Comprueba fuente y estado modificado intactos,
+edición/estructura/deshacer, formato de celda, imagen local, carga HTTP expresa,
+404, límites con/sin Content-Length, redirección prohibida y cancelación al cerrar.
+`python3 lab/check_remote_editor.py` incluye lectura binaria de imagen por SFTP,
+rutas con espacios y rechazo de imágenes de más de 4 MiB.
