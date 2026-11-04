@@ -152,6 +152,41 @@ impl LocalPane {
             }
         });
     }
+    fn remove_selected(self: &Rc<Self>) {
+        if self.busy.get() { return; }
+        let paths = self.selected_paths();
+        if paths.is_empty() { return; }
+        let Some(window) = self.state.upgrade().and_then(|s| s.window()) else { return; };
+        let pane = Rc::downgrade(self);
+        let description = paths.iter().take(10).map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
+        let dialog = gtk::AlertDialog::builder()
+            .message(format!("¿Mover {} elemento(s) a la papelera?", paths.len()))
+            .detail(description)
+            .buttons(["Cancelar", "Mover a la papelera"])
+            .cancel_button(0).default_button(0).build();
+        glib::spawn_future_local(async move {
+            if dialog.choose_future(Some(&window)).await != Ok(1) { return; }
+            let Some(pane) = pane.upgrade() else { return; };
+            if pane.busy.replace(true) { return; }
+            pane.widget.set_sensitive(false);
+            let mut failure = None;
+            for path in paths {
+                if let Err(error) = gio::File::for_path(&path).trash_future(PRIORITY).await {
+                    failure = Some(format!("No se pudo mover {} a la papelera: {error}", path.display()));
+                    break;
+                }
+            }
+            pane.busy.set(false);
+            pane.widget.set_sensitive(true);
+            pane.refresh();
+            if let Some(error) = failure {
+                pane.status.set_text(&error);
+                pane.status.set_visible(true);
+                gtk::AlertDialog::builder().message("No se completó la eliminación")
+                    .detail(&error).build().show(Some(&window));
+            }
+        });
+    }
     pub fn is_loading(&self) -> bool {
         self.busy.get()
     }
@@ -259,6 +294,20 @@ impl LocalPane {
             });
             tools.append(&button);
         }
+        let remove = icon_button("user-trash-symbolic", "Eliminar… (mover a la papelera)");
+        let weak = Rc::downgrade(state);
+        let directory = path.downgrade();
+        remove.connect_clicked(move |_| {
+            let (Some(state), Some(directory)) = (weak.upgrade(), directory.upgrade()) else { return; };
+            let pane = state.local_browsers.borrow().iter().filter_map(Weak::upgrade).find(|p| p.path == directory);
+            if let Some(pane) = pane { pane.remove_selected(); }
+        });
+        let weak = remove.downgrade();
+        list.connect_selected_rows_changed(move |list| {
+            if let Some(button) = weak.upgrade() { button.set_sensitive(!list.selected_rows().is_empty()); }
+        });
+        remove.set_sensitive(false);
+        tools.append(&remove);
         let columns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         for (caption, width, expand) in [
             ("Nombre", 144, true),

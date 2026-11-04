@@ -77,6 +77,7 @@ pub(crate) fn editor_document(
     let status = gtk::Label::new(Some("Cargando texto UTF-8 (máximo 8 MiB)…"));
     status.set_xalign(0.0);
     status.set_wrap(true);
+    status.connect_label_notify(|label| label.set_visible(!label.text().is_empty()));
     let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     toolbar.add_css_class("editor-toolbar");
     let badge = gtk::Label::new(Some("EDITOR / UTF-8"));
@@ -136,7 +137,8 @@ pub(crate) fn editor_document(
     let recovery = crate::recovery_ui::Tracker::attach(state, &root, &buffer, &status, source.clone(), recovered.as_ref().map(|d|d.id.clone()).or(document_id));
     recovery.set_base(recovered.as_ref().and_then(|d|d.base_text.clone()));
     crate::recovery_ui::bind_copy(&save_copy, window, &buffer, &status, source.basename());
-    crate::syntax::bind(&buffer, file.basename().unwrap_or_default());
+    let markdown = nexuterm::markdown::supported(std::path::Path::new(&source.basename()));
+    if !markdown { crate::syntax::bind(&buffer, file.basename().unwrap_or_default()); }
     state
         .documents
         .borrow_mut()
@@ -236,6 +238,14 @@ pub(crate) fn editor_document(
     let target = page.downgrade();
     let current_file = Rc::new(RefCell::new(file.clone()));
     let current_remote = Rc::new(RefCell::new(remote));
+    if markdown {
+        let base = match &source {
+            nexuterm::recovery::Source::Local { path, .. } => path.parent().map(std::path::Path::to_owned),
+            _ => None,
+        };
+        crate::markdown_editor::bind(&root, &text, &gutter, base, Some(current_remote.clone()));
+    }
+
     if let Some(bind) = bind_remote {
         let s = Rc::downgrade(state);
         let remote = current_remote.clone(); let file = current_file.clone(); let tag = etag.clone();
@@ -529,7 +539,7 @@ pub(crate) fn editor_document(
                     loaded.set(true);
                     status.set_text(if is_remote_origin && !is_recovered {
                         "UTF-8 · SFTP atómico con propietario/grupo/permisos POSIX; ACL y atributos extendidos no garantizados."
-                    } else if etag.borrow().is_some() { "UTF-8 · guardado con comprobación de versión" }
+                    } else if etag.borrow().is_some() { if markdown { "" } else { "UTF-8 · guardado con comprobación de versión" } }
                     else { "El servidor no aporta versión/etag: edición disponible, guardado deshabilitado para evitar sobrescrituras." });
                     if let Some(notice) = notice { status.set_text(notice); }
                     #[cfg(debug_assertions)]

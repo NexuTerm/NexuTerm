@@ -1,0 +1,119 @@
+# Editor Markdown visual — implementación inicial y siguientes pasos
+
+Rama: `feat/markdown_viewer`. Referencia inspeccionada: pluMd 0.2.5 en
+`/home/mjulia/source/pluMd`. Se ha implementado una primera versión nativa: parser CommonMark/GFM con rangos,
+vistas Visual/Código, cinta Inicio/Insertar/Vista, formato, listas, deshacer/rehacer,
+zoom, formularios para referencias, celdas editables y vistas previas de imágenes.
+No implica equivalencia completa con PluMd. El orden siguiente conserva el diseño y los
+criterios pendientes para ampliar esta base.
+
+## Hallazgos de la revisión
+
+PluMd utiliza Electron y CodeMirror 6. `livePreview.js` oculta delimitadores sobre
+el árbol sintáctico y añade decoraciones y widgets; no convierte todo el documento
+a HTML para después volver a serializarlo. `commands.js` aplica transacciones sobre
+la fuente para formato, listas y selección. `ribbon.js` organiza Inicio, Insertar,
+Vista y Ayuda. `tables.js` y `tablaModelo.mjs` separan la edición visual de tablas
+de su representación Markdown. `images.js` resuelve recursos relativos al documento;
+las imágenes HTTP requieren carga expresa en la vista visual.
+
+La idea reutilizable es conservar Markdown como fuente única y representar su
+formato encima. El código de referencia tiene licencia MIT: si se incorpora código,
+deben conservarse el aviso de copyright y la licencia. No se ha copiado código.
+
+NexuTerm usa Rust/GTK4 y un TextBuffer por documento en `src/files.rs`. El guardado
+y `recovery_ui::snapshot` incluyen caracteres ocultos. Hay límites UTF-8, conflictos
+por etag, borradores privados y guardado remoto protegido. Estas rutas deben seguir
+siendo las únicas responsables de persistir documentos. WebKitGTK 6 no está
+disponible mediante pkg-config en el entorno inspeccionado; incorporar la interfaz
+web de PluMd exigiría un nuevo motor, dependencias y puente de edición/guardado.
+
+## Comportamiento objetivo
+
+- Abrir `.md` y `.markdown` en modo visual cuando se use el editor integrado.
+  Mantener las preferencias de apertura externa y el editor de otros tipos.
+- Documento editable con tipografía proporcional, ancho de lectura cómodo y temas
+  claro/oscuro. Alternancia Visual/Código sin conversión destructiva ni cambio del
+  estado de modificación por cambiar de vista.
+- Cinta compacta: Inicio (estilos, negrita, cursiva, tachado, listas y tareas),
+  Insertar (enlaces, imágenes, tablas, citas y código), Vista (código y zoom).
+- Deshacer/rehacer agrupado por acción, atajos y estado de formato de la selección.
+- Tablas con edición de celdas; imágenes locales relativas con límites de tamaño;
+  recursos remotos solo mediante una acción expresa. Ningún HTML ni script del
+  documento debe ejecutarse. No descargar recursos al abrir un Markdown SSH.
+- Conservar YAML, HTML literal, extensiones no reconocidas, Unicode, saltos de línea
+  y delimitadores que no se hayan editado. No imponer anchos de columna no estándar
+  ni presentar colores/fuentes arbitrarios de Word como Markdown portable.
+
+## Orden de trabajo y aceptación
+
+1. **Base de documento:** detectar extensiones sin distinguir mayúsculas; incorporar
+   un parser CommonMark/GFM mantenido con rangos de origen, evitando un parser
+   artesanal basado en expresiones regulares. Convertir correctamente offsets UTF-8
+   a posiciones del TextBuffer. Probar código cercado, sintaxis anidada, escapes,
+   documentos incompletos y límites antes de ocultar delimitadores.
+2. **Visual/Código:** aplicar formato y ocultación sobre el mismo buffer. Preservar
+   cursor, selección, deshacer, estado modificado y borrador. No acumular callbacks
+   ni reparsar ilimitadamente el documento en cada pulsación. Probar edición junto
+   a marcas ocultas, selección con teclado, IME, pegado y búsqueda.
+3. **Cinta de edición:** comandos de formato y bloques con operaciones de deshacer
+   coherentes. Conservar foco/selección al pulsar botones. No añadir otro explorador,
+   gestor de pestañas, sistema de plugins o formato de persistencia.
+4. **Tablas e imágenes:** widgets vinculados a rangos del documento, modificaciones
+   locales de la fuente y rutas ligadas a cada documento, no a un directorio global.
+   Conservar código/Markdown no compatible mediante la vista Código.
+5. **Integración y regresión:** aperturas locales/SSH, comparar versiones, guardar,
+   recuperar después de SIGKILL y reabrir espacios. Abrir/cambiar de modo/guardar
+   sin editar debe conservar el contenido. Verificar conflictos y archivos ausentes.
+6. **Aceptación visual:** capturas claro/oscuro y ventanas estrechas, uso real de
+   botones, selección y atajos; documentos grandes, caracteres combinados y emoji.
+   Compilaciones y pruebas sobre las distribuciones objetivo del proyecto.
+
+El núcleo nativo evita introducir Electron y un segundo entorno de ejecución. Se añade pulldown-cmark 0.13.6 sin características opcionales (MSRV declarado 1.71.1),
+compatible con el mínimo Rust 1.92 del proyecto. No se ejecuta HTML del documento.
+El parseo está limitado a 256 KiB y 65536 rangos, fuera del hilo GTK, con un trabajo
+por documento; los demás archivos siguen siendo editables como texto.
+
+## Tablas e imágenes nativas
+
+Los widgets se superponen sobre rangos del TextBuffer; no añaden caracteres de
+objeto ni un segundo documento. Editar una celda actualiza inmediatamente su
+rango Markdown, incluso antes del siguiente ciclo GTK; guardar y recuperar
+siguen usando el mismo buffer. Se escapan las barras verticales nuevas. Los
+cambios de estructura conservan los contenidos y alineaciones GFM y se deshacen
+como una acción. La normalización de espacios solo afecta a una tabla cuya
+estructura se modifica expresamente. Las celdas muestran su sintaxis Markdown;
+la cinta admite negrita, cursiva, tachado y código en la selección de una celda.
+Los estilos de párrafo e inserciones de bloques se aplican fuera de las celdas.
+
+Límites por documento: 16 bloques visuales y 256 celdas; cada tabla admite hasta
+32 filas y 12 columnas. Una celda admite 1024 caracteres y 4096 bytes. Las tablas
+que exceden estos límites siguen como texto; no se truncan. Las imágenes en línea
+junto a otro texto conservan su referencia literal. Código permite editar toda
+la sintaxis y cualquier construcción no cubierta por los widgets.
+
+En **Insertar → Imagen**, **Explorar…** abre el selector nativo, con filtros de
+imágenes y todos los archivos. Seleccionar rellena la referencia, sin modificar el
+documento hasta pulsar Insertar: ruta relativa dentro de la carpeta del documento
+y URI local fuera de ella o para documentos SSH. No copia ni sube el archivo.
+
+Las imágenes locales se resuelven respecto al documento. La carga automática
+queda dentro de su carpeta, comprobando también los enlaces simbólicos; fuera
+de ella requiere Cargar. HTTP/HTTPS y las rutas SSH siempre requieren pulsar
+Cargar. SSH utiliza el destino autenticado que ya tiene vinculado el documento,
+no la ruta temporal local ni una conexión nueva. Se rechazan credenciales en URL,
+SVG, HTML y otros esquemas. El original nunca se modifica. `curl` es necesario
+para HTTP, con redirecciones limitadas a HTTP/HTTPS y límites de tamaño y tiempo.
+
+El límite es 4 MiB y cuatro millones de píxeles por imagen, con vistas previas
+escaladas, dos trabajos simultáneos y una caché de ocho texturas por documento.
+Cerrar la vista cancela las solicitudes HTTP/SSH; las lecturas y decodificaciones
+locales en curso terminan de forma acotada fuera del hilo GTK. La autorización de
+carga externa no se persiste ni se reutiliza tras cerrar el documento.
+
+`python3 lab/check_markdown_media.py` ejecuta GTK en claro/oscuro y un servidor
+HTTP exclusivamente de loopback. Comprueba fuente y estado modificado intactos,
+edición/estructura/deshacer, formato de celda, imagen local, carga HTTP expresa,
+404, límites con/sin Content-Length, redirección prohibida y cancelación al cerrar.
+`python3 lab/check_remote_editor.py` incluye lectura binaria de imagen por SFTP,
+rutas con espacios y rechazo de imágenes de más de 4 MiB.

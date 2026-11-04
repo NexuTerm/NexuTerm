@@ -51,3 +51,8 @@ pub mod ssh_import;
 pub mod tunnels;
 
 pub mod interventions;
+
+pub mod markdown;
+
+pub mod markdown_media;
+pub mod markdown_image;

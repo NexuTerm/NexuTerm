@@ -132,6 +132,16 @@ async fn remote_editor_atomic_save_recovery_conflict_and_limits() {
     let doc = RemoteDocument::open(connection.clone(), remote.clone())
         .await
         .unwrap();
+    // Explicit binary images use the same authenticated destination and have a tighter cap.
+    let asset=remote.parent().unwrap().join("imagen con espacio.png");
+    let image_bytes=b"\x89PNG\r\n\x1a\n\x00\xffbinary-image";
+    tokio::fs::write(&asset,image_bytes).await.unwrap();
+    assert_eq!(doc.read_image("imagen%20con%20espacio.png").await.unwrap(),image_bytes);
+    assert!(doc.read_image("https://example.invalid/no-network").await.is_err());
+    let oversized=remote.parent().unwrap().join("large-image.png");
+    std::fs::File::create(&oversized).unwrap().set_len(nexuterm::markdown_image::MAX_BYTES as u64+1).unwrap();
+    assert!(doc.read_image("large-image.png").await.unwrap_err().contains("4 MiB"));
+
     let local = doc.local_path().to_path_buf();
     // Recovery belongs to persistent app data, never to the SSH TempDir.
     let draft = nexuterm::recovery::Draft {

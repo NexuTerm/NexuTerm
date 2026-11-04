@@ -28,6 +28,10 @@ En **Preferencias → Navegador** puedes configurar las columnas Tipo, Tamaño y
 Permisos (Nombre siempre visible), si se muestran los ocultos al abrir, la
 visibilidad inicial del lateral y la aplicación para abrir archivos locales.
 Los cambios se guardan y se aplican a los paneles abiertos, locales y remotos.
+En el explorador local, **Eliminar…** está disponible en la barra y en el menú
+contextual. Mueve los archivos o carpetas seleccionados a la papelera después de
+confirmar. Si la papelera no está disponible, muestra el error y no realiza un
+borrado permanente.
 Los permisos se muestran como `rwxr-xr-x`, incluyendo setuid/setgid/sticky;
 si el servidor no los proporciona se muestra `—` en lugar de inventarlos.
 
@@ -956,6 +960,38 @@ cargo test --locked --no-default-features
 
 Para una prueba breve de arranque con configuración aislada, consulta `docs/VALIDACION.md`.
 Las pruebas de escritorio remoto necesitan servidores de laboratorio; no se usan equipos de producción.
+
+## Editor Markdown visual
+
+Los archivos `.md` y `.markdown` abiertos en el editor integrado muestran una
+cinta nativa con Inicio, Insertar y Vista. Inicio organiza Portapapeles, Fuente,
+Párrafo, Estilos y Edición en grupos separados, con galería de títulos y cita,
+resaltado del estilo actual y acceso a copiar, cortar, pegar y seleccionar todo.
+En ventanas estrechas la cinta permite desplazamiento horizontal. Visual aplica títulos, negrita, cursiva,
+tachado, citas y código; Código muestra la fuente completa. Ambos modos editan el
+mismo documento, sin convertirlo a HTML. Guardar y recuperar incluyen las marcas
+ocultas y mantienen las comprobaciones habituales de conflictos y destinos SSH.
+
+Inicio incluye estilos, listas, tareas, deshacer/rehacer y formato de selección
+(Ctrl+B/Ctrl+I). Insertar permite introducir tablas y bloques Markdown y abrir un
+formulario para enlaces e imágenes. En **Insertar → Imagen**, **Explorar…** abre el
+selector de archivos; las imágenes de la carpeta del documento usan rutas relativas.
+Seleccionar un archivo no lo copia ni lo sube por SSH. Vista ajusta el zoom. Las tablas GFM ofrecen
+celdas editables y botones para añadir/eliminar la última fila o columna, con
+deshacer y conservación de la alineación. Las imágenes PNG, JPEG y WebP en una
+línea independiente tienen vista previa. Se cargan automáticamente las imágenes
+locales dentro de la carpeta del documento; las externas y HTTP/HTTPS requieren
+pulsar **Cargar**, cuyo tooltip muestra la referencia. En documentos SSH se usa
+solo la sesión ya vinculada y mediante una acción expresa. No se ejecutan SVG ni
+HTML. Cada imagen admite hasta 4 MiB y cuatro millones de píxeles; HTTP utiliza
+`curl` con tiempo y redirecciones acotados. Cerrar el editor cancela las descargas.
+La vista visual está acotada a 256 KiB; los documentos mayores siguen disponibles
+como texto dentro del límite general del editor. Las construcciones no interpretadas
+se conservan literalmente. No se pretende compatibilidad con documentos Word.
+
+Pruebas gráficas: `python3 lab/check_markdown.py` y `python3 lab/check_markdown_media.py`
+(requieren Cargo, Xvfb, D-Bus y `curl` para HTTP).
+Diseño, alcance y siguientes mejoras en [MARKDOWN_EDITOR.md](docs/MARKDOWN_EDITOR.md).
 
 ## Documentación técnica
 

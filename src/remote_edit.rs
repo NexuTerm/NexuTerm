@@ -36,6 +36,25 @@ impl RemoteDocument {
     pub fn remote_path(&self) -> &Path {
         &self.remote
     }
+    /// Explicit preview through this already-authenticated destination, never a new login.
+    pub async fn read_image(&self, reference: &str) -> Result<Vec<u8>, String> {
+        if reference.len() > 4096 || reference.chars().any(char::is_control)
+            || url::Url::parse(reference).is_ok()
+        {
+            return Err("La imagen SSH requiere una ruta de archivo, no una URL".into());
+        }
+        let parent = self.remote.parent().ok_or("Documento sin carpeta remota")?;
+        let path = url::Url::from_directory_path(parent)
+            .map_err(|_| "Carpeta SSH inválida")?
+            .join(reference).map_err(|e| e.to_string())?
+            .to_file_path().map_err(|_| "Ruta de imagen SSH inválida")?;
+        let channel = self.connection.sftp().await?;
+        let result = tokio::time::timeout(Duration::from_secs(20),
+            read_version_limit(&channel.sftp, &path, crate::markdown_image::MAX_BYTES)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+        let (bytes, _) = result.map_err(|_| "Tiempo agotado al cargar la imagen SSH")??;
+        Ok(bytes)
+    }
     pub fn host(&self) -> &str {
         &self.connection.profile.host
     }
@@ -481,6 +500,10 @@ async fn read(sftp: &Sftp, path: &Path) -> Result<Vec<u8>, String> {
     Ok(read_version(sftp, path).await?.0)
 }
 async fn read_version(sftp: &Sftp, path: &Path) -> Result<(Vec<u8>, MetaData), String> {
+    read_version_limit(sftp, path, EDIT_LIMIT).await
+}
+async fn read_version_limit(sftp: &Sftp, path: &Path, limit: usize) -> Result<(Vec<u8>, MetaData), String> {
+    let limit_error = if limit == EDIT_LIMIT { "Archivo mayor de 8 MiB" } else { "Imagen superior a 4 MiB" };
     let before = sftp
         .fs()
         .symlink_metadata(path)
@@ -489,8 +512,8 @@ async fn read_version(sftp: &Sftp, path: &Path) -> Result<(Vec<u8>, MetaData), S
     if !before.file_type().is_some_and(|t| t.is_file()) {
         return Err("Solo se editan archivos regulares; no enlaces simbólicos".into());
     }
-    if before.len().is_some_and(|n| n > EDIT_LIMIT as u64) {
-        return Err("Archivo mayor de 8 MiB".into());
+    if before.len().is_some_and(|n| n > limit as u64) {
+        return Err(limit_error.into());
     }
     let mut input = sftp.open(path).await.map_err(|e| e.to_string())?;
     let result = async {
@@ -510,8 +533,8 @@ async fn read_version(sftp: &Sftp, path: &Path) -> Result<(Vec<u8>, MetaData), S
             if block.is_empty() {
                 break;
             }
-            if bytes.len() + block.len() > EDIT_LIMIT {
-                return Err("Archivo mayor de 8 MiB".into());
+            if bytes.len() + block.len() > limit {
+                return Err(limit_error.into());
             }
             bytes.extend_from_slice(&block);
         }
