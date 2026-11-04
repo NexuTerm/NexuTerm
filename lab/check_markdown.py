@@ -10,6 +10,7 @@ def main():
     artifacts.mkdir(exist_ok=True)
     for theme in ('light', 'dark'):
         env = dict(os.environ, GDK_BACKEND='x11', GSK_RENDERER='cairo',
+                   GDK_DEBUG=','.join(filter(None, (os.environ.get('GDK_DEBUG', ''), 'no-portals'))),
                    NEXUTERM_MARKDOWN_THEME=theme,
                    NEXUTERM_MARKDOWN_SCREENSHOT=str(artifacts / f'markdown-{theme}.png'))
         result = subprocess.run(['xvfb-run', '-a', 'dbus-run-session', '--', 'cargo',
@@ -21,7 +22,7 @@ def main():
         (artifacts / f'markdown-{theme}.log').write_text(log)
         assert result.returncode == 0 and '1 passed' in log and 'CRITICAL' not in log, log
         assert (artifacts / f'markdown-{theme}.png').is_file()
-        print(f'PASS Markdown {theme}: hidden markup, exact source, unchanged dirty state, formatting, undo and recoverable text')
+        print(f'PASS Markdown {theme}: hidden markup, exact source, unchanged dirty state, formatting, undo, recoverable text and native image selection')
 
 if __name__ == '__main__':
     main()

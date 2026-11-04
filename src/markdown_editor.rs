@@ -184,7 +184,7 @@ fn prefix(view: &gtk::TextView, prefix: &str) {
     buffer.end_user_action();
     view.grab_focus();
 }
-fn reference(view: &gtk::TextView, image: bool) {
+fn reference(view: &gtk::TextView, image: bool, base: Option<&std::path::Path>) {
     if focused_cell(view).is_some() {
         return;
     }
@@ -231,6 +231,72 @@ fn reference(view: &gtk::TextView, image: bool) {
     let accept = gtk::Button::with_label("Insertar");
     body.append(&caption);
     body.append(&target);
+    if image {
+        notice.set_text(
+            "Se insertará una referencia; la imagen no se copiará ni subirá al servidor.",
+        );
+        let browse = gtk::Button::with_label("Explorar…");
+        browse.set_widget_name("md-image-browse");
+        body.append(&browse);
+        let parent = dialog.downgrade();
+        let field = target.downgrade();
+        let base = base.map(std::path::Path::to_owned);
+        let cancel = gtk::gio::Cancellable::new();
+        let closed = cancel.clone();
+        dialog.connect_unrealize(move |_| closed.cancel());
+        browse.connect_clicked(move |button| {
+            let Some(parent) = parent.upgrade() else {
+                return;
+            };
+            let chooser = gtk::FileDialog::builder()
+                .title("Seleccionar imagen")
+                .build();
+            let images = gtk::FileFilter::new();
+            images.set_name(Some("Imágenes PNG, JPEG y WebP"));
+            for mime in ["image/png", "image/jpeg", "image/webp"] {
+                images.add_mime_type(mime);
+            }
+            let all = gtk::FileFilter::new();
+            all.set_name(Some("Todos los archivos"));
+            all.add_pattern("*");
+            let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&images);
+            filters.append(&all);
+            chooser.set_filters(Some(&filters));
+            chooser.set_default_filter(Some(&images));
+            if let Some(base) = &base {
+                chooser.set_initial_folder(Some(&gtk::gio::File::for_path(base)));
+            }
+            let field = field.clone();
+            let base = base.clone();
+            let weak = button.downgrade();
+            button.set_sensitive(false);
+            chooser.open(Some(&parent), Some(&cancel), move |result| {
+                if let Some(button) = weak.upgrade() {
+                    button.set_sensitive(true);
+                }
+                if let Ok(file) = result
+                    && let Some(field) = field.upgrade()
+                {
+                    // A file URI also works for a remote document without mistaking it for an SSH path.
+                    let uri = file.uri().to_string();
+                    let value = base
+                        .as_ref()
+                        .and_then(|base| {
+                            let path = file.path()?;
+                            if !path.starts_with(base) {
+                                return None;
+                            }
+                            url::Url::from_directory_path(base)
+                                .ok()?
+                                .make_relative(&url::Url::parse(&uri).ok()?)
+                        })
+                        .unwrap_or(uri);
+                    field.set_text(&value);
+                }
+            });
+        });
+    }
     body.append(&notice);
     body.append(&accept);
     dialog.set_child(Some(&body));
@@ -599,10 +665,11 @@ pub fn bind(
         let button = ribbon_button(label, label);
         insert_group.append(&button);
         let weak = view.downgrade();
+        let base = document_base.clone();
         button.connect_clicked(move |_| {
             if let Some(v) = weak.upgrade() {
                 if label == "Enlace" || label == "Imagen" {
-                    reference(&v, label == "Imagen");
+                    reference(&v, label == "Imagen", base.as_deref());
                 } else {
                     wrap(&v, before, after);
                 }
@@ -1020,7 +1087,7 @@ mod tests {
         settle();
         assert_eq!(crate::recovery_ui::snapshot(&buffer).unwrap(), source);
         buffer.select_range(&buffer.iter_at_offset(at), &buffer.iter_at_offset(at + 5));
-        reference(&view, false);
+        reference(&view, false, None);
         settle();
         let dialog = gtk::Window::list_toplevels()
             .into_iter()
@@ -1054,6 +1121,56 @@ mod tests {
             crate::recovery_ui::snapshot(&buffer)
                 .unwrap()
                 .contains("[Texto](https://example.invalid/a%20b)")
+        );
+        buffer.undo();
+        settle();
+        assert_eq!(crate::recovery_ui::snapshot(&buffer).unwrap(), source);
+        let images = tempfile::tempdir().unwrap();
+        let image = images.path().join("foto con espacio.png");
+        std::fs::write(&image, b"image picker fixture").unwrap();
+        buffer.select_range(&buffer.iter_at_offset(at), &buffer.iter_at_offset(at + 5));
+        reference(&view, true, Some(images.path()));
+        settle();
+        let form = gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .find(|w| w.title().as_deref() == Some("Insertar imagen"))
+            .unwrap();
+        named(form.upcast_ref(), "md-image-browse")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        settle();
+        let chooser = gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::FileChooserDialog>().ok())
+            .find(|w| w.title().as_deref() == Some("Seleccionar imagen"))
+            .expect("Native image picker must open");
+        chooser.set_file(&gtk::gio::File::for_path(&image)).unwrap();
+        settle();
+        chooser.response(gtk::ResponseType::Accept);
+        settle();
+        let body = form.child().unwrap();
+        let path = body
+            .first_child()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Entry>()
+            .unwrap();
+        assert_eq!(path.text(), "foto%20con%20espacio.png");
+        assert_eq!(crate::recovery_ui::snapshot(&buffer).unwrap(), source);
+        body.last_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        settle();
+        assert!(
+            crate::recovery_ui::snapshot(&buffer)
+                .unwrap()
+                .contains("![Texto](foto%20con%20espacio.png)")
         );
         buffer.undo();
         settle();

@@ -970,7 +970,9 @@ ocultas y mantienen las comprobaciones habituales de conflictos y destinos SSH.
 
 Inicio incluye estilos, listas, tareas, deshacer/rehacer y formato de selección
 (Ctrl+B/Ctrl+I). Insertar permite introducir tablas y bloques Markdown y abrir un
-formulario para enlaces e imágenes. Vista ajusta el zoom. Las tablas GFM ofrecen
+formulario para enlaces e imágenes. En **Insertar → Imagen**, **Explorar…** abre el
+selector de archivos; las imágenes de la carpeta del documento usan rutas relativas.
+Seleccionar un archivo no lo copia ni lo sube por SSH. Vista ajusta el zoom. Las tablas GFM ofrecen
 celdas editables y botones para añadir/eliminar la última fila o columna, con
 deshacer y conservación de la alineación. Las imágenes PNG, JPEG y WebP en una
 línea independiente tienen vista previa. Se cargan automáticamente las imágenes

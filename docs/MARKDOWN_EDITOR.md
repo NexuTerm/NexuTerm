@@ -92,6 +92,11 @@ que exceden estos límites siguen como texto; no se truncan. Las imágenes en l�
 junto a otro texto conservan su referencia literal. Código permite editar toda
 la sintaxis y cualquier construcción no cubierta por los widgets.
 
+En **Insertar → Imagen**, **Explorar…** abre el selector nativo, con filtros de
+imágenes y todos los archivos. Seleccionar rellena la referencia, sin modificar el
+documento hasta pulsar Insertar: ruta relativa dentro de la carpeta del documento
+y URI local fuera de ella o para documentos SSH. No copia ni sube el archivo.
+
 Las imágenes locales se resuelven respecto al documento. La carga automática
 queda dentro de su carpeta, comprobando también los enlaces simbólicos; fuera
 de ella requiere Cargar. HTTP/HTTPS y las rutas SSH siempre requieren pulsar
