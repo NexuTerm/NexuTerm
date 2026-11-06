@@ -1,3 +1,5 @@
+<img src="logo/NexuTerm.png" alt="NexuTerm" width="128">
+
 # NexuTerm
 
 Aplicación Rust para Linux con terminal por pestañas y conexiones SSH, SFTP, Telnet, FTP, RDP y VNC.
@@ -22,8 +24,8 @@ Versión **1.0.0**, primera release pública para Linux. Consulta las
 - SSH mediante OpenSSH con usuario, puerto, clave y salto; contraseñas solicitadas en el PTY.
 - Navegador remoto automático en el lateral de la aplicación para cada sesión SSH: ruta editable, carpeta de inicio, carpeta superior, páginas de 200 entradas, subida/descarga de archivos, progreso y cancelación. Usa SFTP sobre la conexión OpenSSH compartida del terminal, con la misma autenticación, puerto, clave y salto.
 - Editor de texto con números de línea y cabecera moderna mediante GIO, UTF-8 hasta 8 MiB, con comprobación etag antes de guardar y aviso de cambios sin guardar. Resaltado por lenguaje (Python, Rust, C#, SQL y otros), con funciones, palabras clave, cadenas y comentarios diferenciados y colores adaptados al tema.
-- VNC integrado en una pestaña GTK: escritorio ajustado al área disponible, teclado, ratón y rueda, contraseña temporal y desconexión al cerrar la pestaña. No necesita Remmina ni otro visor.
-- RDP integrado mediante IronRDP: escritorio en una pestaña GTK, teclado, ratón, contraseña temporal y TLS con validación de certificado y nombre del servidor. No necesita FreeRDP ni Remmina.
+- VNC integrado en una pestaña GTK: escritorio ajustado al área disponible, teclado, ratón y rueda, contraseña temporal y desconexión al cerrar la pestaña.
+- RDP integrado mediante IronRDP: escritorio en una pestaña GTK, teclado, ratón, contraseña temporal y TLS con validación de certificado y nombre del servidor.
 - Configuración XDG versionada, escritura atómica y archivo privado; no contiene campos de contraseña.
 
 En **Preferencias → Navegador** puedes configurar las columnas Tipo, Tamaño y
@@ -754,9 +756,7 @@ Desde el repositorio puedes recompilar con el script:
 
 Elige una sola opción. El script funciona también desde otro directorio, conserva
 `Cargo.lock` y devuelve el error de Cargo si falla la compilación. Cargo debe estar
-en `PATH`; si falta, se reutiliza una instalación existente en `~/.cargo/bin` o
-en el entorno local de Rea, sin modificar la configuración global. También puedes
-indicar su ejecutable mediante `CARGO=/ruta/a/cargo`. Se respeta `CARGO_TARGET_DIR`
+en `PATH`; también puedes indicar su ejecutable mediante `CARGO=/ruta/a/cargo`. Se respeta `CARGO_TARGET_DIR`
 si necesitas otra carpeta de compilación. Por defecto usa dos trabajos en paralelo;
 puedes ajustarlos con `CARGO_BUILD_JOBS`.
 
@@ -791,7 +791,9 @@ Instala Rust y asegúrate de tener `cargo` en `PATH`. Consulta [rust-lang.org](h
 
 ### Instalación en el escritorio Linux
 
-Las fuentes de 1.0.0 se publican en [GitHub Releases](https://github.com/NexuTerm/NexuTerm/releases/tag/v1.0.0).
+La release 1.0.0 de [GitHub Releases](https://github.com/NexuTerm/NexuTerm/releases/tag/v1.0.0)
+publica únicamente código fuente. Para instalar un `.deb`, primero genéralo
+con las instrucciones siguientes; no hay un binario adjunto en esa release.
 La distribución para Debian/Ubuntu utiliza un paquete `.deb` con dependencias
 declaradas. Comprueba la distribución de construcción y los requisitos de cada
 paquete en las notas de la versión; un binario de una distribución reciente no
@@ -993,7 +995,7 @@ HTML. Cada imagen admite hasta 4 MiB y cuatro millones de píxeles; HTTP utiliza
 `curl` con tiempo y redirecciones acotados. Cerrar el editor cancela las descargas.
 La vista visual está acotada a 256 KiB; los documentos mayores siguen disponibles
 como texto dentro del límite general del editor. Las construcciones no interpretadas
-se conservan literalmente. No se pretende compatibilidad con documentos Word.
+se conservan literalmente.
 
 Pruebas gráficas: `python3 lab/check_markdown.py` y `python3 lab/check_markdown_media.py`
 (requieren Cargo, Xvfb, D-Bus y `curl` para HTTP).

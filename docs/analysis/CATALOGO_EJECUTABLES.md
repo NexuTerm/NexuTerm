@@ -14,7 +14,7 @@ del proyecto; no certifica su instalación en el equipo actual.
 | OpenSSH: `ssh` | Terminal, SFTP y edición remota | Conexiones SSH/SFTP |
 | `telnet` | Terminal Telnet | Conexiones Telnet |
 | GVfs con backend FTP | Navegación y transferencias FTP | Conexiones FTP |
-| `curl` | Compatibilidad FTP Windows CE y peticiones API | Funciones correspondientes |
+| `curl` | Subidas FTP, compatibilidad Windows CE, API e imágenes HTTP | Funciones correspondientes |
 | Secret Service y proveedor de llavero | Persistencia opcional de credenciales | Guardado de secretos |
 | CLI o adaptador del agente configurado | Transporte nativo de chat | Opcional por perfil |
 | `pw-record`, `whisper-cli` y modelo compatible | Dictado local | Opcional |
@@ -23,7 +23,7 @@ del proyecto; no certifica su instalación en el equipo actual.
 | `sshd`, `ssh-keygen`, `ssh` | Servidor y claves temporales | Pruebas de edición remota |
 
 RDP utiliza IronRDP compilado en el programa. VNC utiliza LibVNCClient.
-No requieren instalar FreeRDP, Remmina ni un visor VNC externo.
+No requieren visores de escritorio remoto externos.
 Las bibliotecas Rust y sus versiones resueltas se consultan en `Cargo.toml`
 y `Cargo.lock`; no se duplican aquí.
 

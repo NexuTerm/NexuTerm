@@ -1,9 +1,6 @@
 # NexuTerm 1.0.0
 
 Primera release pública, 4 de noviembre de 2026. Etiqueta: `v1.0.0`.
-El código de esta entrega procede de `develop`, después de integrar el editor
-Markdown. La etiqueta identifica la instantánea de publicación; no se publica
-una compilación antigua de `main`.
 
 ## Incluido
 
@@ -20,25 +17,11 @@ explica los controles, permisos y límites de cada función.
 Descarga desde [GitHub Releases](https://github.com/NexuTerm/NexuTerm/releases/tag/v1.0.0).
 GitHub incluye los archivos de código fuente asociados a la etiqueta.
 
-El paquete `nexuterm_1.0.0_amd64.deb` se construye en **Ubuntu 26.04.1 LTS,
-Linux x86_64**, con GTK 4.22.4, libadwaita 1.9.1 y VTE 0.84.0. Sus dependencias
-mínimas reales se encuentran en el campo `Depends` del paquete. No se presenta
-este binario como compatible con Ubuntu 24.04 ni Debian 13: para esas bases
-hay que compilar allí. Las pruebas históricas sobre esas distribuciones no
-certifican el nuevo paquete ni esta instantánea.
-
-En la carpeta donde descargues el paquete y `SHA256SUMS`:
-
-```bash
-sha256sum -c SHA256SUMS
-dpkg-deb --field nexuterm_1.0.0_amd64.deb Version Architecture Depends
-sudo apt install ./nexuterm_1.0.0_amd64.deb
-```
-
-APT resuelve las dependencias; si no puede satisfacer sus versiones, no fuerces
-la instalación. Los hashes detectan cambios del archivo; no son una firma digital.
-No se modifica la configuración SSH personal ni se incluyen claves o credenciales.
-Los clientes de IA, motores de dictado y sus cuentas se configuran por separado.
+La publicación contiene **solo código fuente**, sin `.deb` ni binarios adjuntos.
+Para instalar un paquete Debian debes compilarlo y generarlo localmente con las
+instrucciones siguientes. Las dependencias se calculan desde el binario y el
+sistema de construcción; no se garantiza compatibilidad con una distribución
+más antigua que aquella donde se genere.
 
 ## Compilar desde la etiqueta
 
@@ -53,6 +36,8 @@ cargo build --locked --release
 ./target/release/nexuterm
 # Opcional, con Python >= 3.11, dpkg-dev y binutils:
 make package
+dpkg-deb --field dist/nexuterm_1.0.0_amd64.deb Version Architecture Depends
+sudo apt install ./dist/nexuterm_1.0.0_amd64.deb
 ```
 
 ## Datos y actualización
@@ -74,7 +59,8 @@ No se promete volver a un binario anterior conservando datos escritos después.
 - Guardar por SFTP sustituye el inodo; no garantiza ACL/atributos extendidos ni
   bloqueo frente a otros clientes. Los conflictos deben revisarse antes de guardar.
 - Markdown visual admite hasta 256 KiB. Las tablas y las imágenes tienen los
-  límites documentados; SVG y otras construcciones permanecen como fuente.
+  límites documentados; SVG no tiene vista previa. Código permite consultar
+  y editar la fuente completa.
 - Macros, Mosh, serie, servidores auxiliares y Flatpak/AppImage no están incluidos.
 - Las pruebas automatizadas no sustituyen la aceptación humana, las cuentas
   reales de proveedores ni las pruebas Wayland. La eliminación mediante papelera

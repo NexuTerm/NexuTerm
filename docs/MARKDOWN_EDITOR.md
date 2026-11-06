@@ -1,78 +1,26 @@
-# Editor Markdown visual — versión 1.0.0
+# Editor Markdown de NexuTerm
 
-Integrado en la versión 1.0.0. Referencia inspeccionada: pluMd 0.2.5 en
-`/home/mjulia/source/pluMd`. Se ha implementado una primera versión nativa: parser CommonMark/GFM con rangos,
-vistas Visual/Código, cinta Inicio/Insertar/Vista, formato, listas, deshacer/rehacer,
-zoom, formularios para referencias, celdas editables y vistas previas de imágenes.
-No implica equivalencia completa con PluMd. El orden siguiente conserva el diseño y los
-criterios pendientes para ampliar esta base.
+Los archivos `.md` y `.markdown` se abren en modo Visual en el editor integrado.
+Código muestra toda la sintaxis. Ambas vistas utilizan el mismo TextBuffer, sin
+conversión a HTML: guardar, recuperar borradores y comparar versiones conservan
+la fuente Markdown, incluidas las marcas ocultas y las construcciones no interpretadas.
+Las preferencias de apertura externa y la edición de otros tipos siguen vigentes.
 
-## Hallazgos de la revisión
+## Formato y cinta
 
-PluMd utiliza Electron y CodeMirror 6. `livePreview.js` oculta delimitadores sobre
-el árbol sintáctico y añade decoraciones y widgets; no convierte todo el documento
-a HTML para después volver a serializarlo. `commands.js` aplica transacciones sobre
-la fuente para formato, listas y selección. `ribbon.js` organiza Inicio, Insertar,
-Vista y Ayuda. `tables.js` y `tablaModelo.mjs` separan la edición visual de tablas
-de su representación Markdown. `images.js` resuelve recursos relativos al documento;
-las imágenes HTTP requieren carga expresa en la vista visual.
+- Inicio: portapapeles, negrita, cursiva, tachado, código, listas, tareas,
+  citas, títulos, selección y deshacer/rehacer.
+- Insertar: referencias de enlaces e imágenes, tablas y bloques de código.
+- Vista: zoom. El selector Visual permite alternar con Código.
 
-La idea reutilizable es conservar Markdown como fuente única y representar su
-formato encima. El código de referencia tiene licencia MIT: si se incorpora código,
-deben conservarse el aviso de copyright y la licencia. No se ha copiado código.
+La interfaz es nativa Rust/GTK4. El parser CommonMark/GFM `pulldown-cmark`
+proporciona rangos de origen convertidos de bytes UTF-8 a posiciones GTK.
+El formato aplica etiquetas sobre el buffer; las acciones de edición modifican
+su fuente. Los documentos no ejecutan HTML ni scripts.
 
-NexuTerm usa Rust/GTK4 y un TextBuffer por documento en `src/files.rs`. El guardado
-y `recovery_ui::snapshot` incluyen caracteres ocultos. Hay límites UTF-8, conflictos
-por etag, borradores privados y guardado remoto protegido. Estas rutas deben seguir
-siendo las únicas responsables de persistir documentos. WebKitGTK 6 no está
-disponible mediante pkg-config en el entorno inspeccionado; incorporar la interfaz
-web de PluMd exigiría un nuevo motor, dependencias y puente de edición/guardado.
-
-## Comportamiento objetivo
-
-- Abrir `.md` y `.markdown` en modo visual cuando se use el editor integrado.
-  Mantener las preferencias de apertura externa y el editor de otros tipos.
-- Documento editable con tipografía proporcional, ancho de lectura cómodo y temas
-  claro/oscuro. Alternancia Visual/Código sin conversión destructiva ni cambio del
-  estado de modificación por cambiar de vista.
-- Cinta compacta: Inicio (estilos, negrita, cursiva, tachado, listas y tareas),
-  Insertar (enlaces, imágenes, tablas, citas y código), Vista (código y zoom).
-- Deshacer/rehacer agrupado por acción, atajos y estado de formato de la selección.
-- Tablas con edición de celdas; imágenes locales relativas con límites de tamaño;
-  recursos remotos solo mediante una acción expresa. Ningún HTML ni script del
-  documento debe ejecutarse. No descargar recursos al abrir un Markdown SSH.
-- Conservar YAML, HTML literal, extensiones no reconocidas, Unicode, saltos de línea
-  y delimitadores que no se hayan editado. No imponer anchos de columna no estándar
-  ni presentar colores/fuentes arbitrarios de Word como Markdown portable.
-
-## Orden de trabajo y aceptación
-
-1. **Base de documento:** detectar extensiones sin distinguir mayúsculas; incorporar
-   un parser CommonMark/GFM mantenido con rangos de origen, evitando un parser
-   artesanal basado en expresiones regulares. Convertir correctamente offsets UTF-8
-   a posiciones del TextBuffer. Probar código cercado, sintaxis anidada, escapes,
-   documentos incompletos y límites antes de ocultar delimitadores.
-2. **Visual/Código:** aplicar formato y ocultación sobre el mismo buffer. Preservar
-   cursor, selección, deshacer, estado modificado y borrador. No acumular callbacks
-   ni reparsar ilimitadamente el documento en cada pulsación. Probar edición junto
-   a marcas ocultas, selección con teclado, IME, pegado y búsqueda.
-3. **Cinta de edición:** comandos de formato y bloques con operaciones de deshacer
-   coherentes. Conservar foco/selección al pulsar botones. No añadir otro explorador,
-   gestor de pestañas, sistema de plugins o formato de persistencia.
-4. **Tablas e imágenes:** widgets vinculados a rangos del documento, modificaciones
-   locales de la fuente y rutas ligadas a cada documento, no a un directorio global.
-   Conservar código/Markdown no compatible mediante la vista Código.
-5. **Integración y regresión:** aperturas locales/SSH, comparar versiones, guardar,
-   recuperar después de SIGKILL y reabrir espacios. Abrir/cambiar de modo/guardar
-   sin editar debe conservar el contenido. Verificar conflictos y archivos ausentes.
-6. **Aceptación visual:** capturas claro/oscuro y ventanas estrechas, uso real de
-   botones, selección y atajos; documentos grandes, caracteres combinados y emoji.
-   Compilaciones y pruebas sobre las distribuciones objetivo del proyecto.
-
-El núcleo nativo evita introducir Electron y un segundo entorno de ejecución. Se añade pulldown-cmark 0.13.6 sin características opcionales (MSRV declarado 1.71.1),
-compatible con el mínimo Rust 1.92 del proyecto. No se ejecuta HTML del documento.
-El parseo está limitado a 256 KiB y 65536 rangos, fuera del hilo GTK, con un trabajo
-por documento; los demás archivos siguen siendo editables como texto.
+La vista visual está limitada a 256 KiB y 65.536 rangos de formato. El parseo se
+realiza fuera del hilo GTK, con un trabajo por documento. Los archivos mayores
+siguen como texto, dentro del límite general de 8 MiB del editor.
 
 ## Tablas e imágenes nativas
 

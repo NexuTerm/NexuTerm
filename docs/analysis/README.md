@@ -1,6 +1,6 @@
 # Documentación técnica de NexuTerm
 
-Revisión documental: 4 de noviembre de 2026 — versión 1.0.0. Describe el proyecto Rust/Linux
+Revisión documental: 6 de noviembre de 2026 — versión 1.0.0. Describe el proyecto Rust/Linux
 actual a partir de sus fuentes y configuración.
 
 - [Arquitectura](ARQUITECTURA.md): plataforma, módulos, conexiones y persistencia.
@@ -10,6 +10,7 @@ actual a partir de sus fuentes y configuración.
   criterios de aceptación de futuras ampliaciones.
 
 El [README principal](../../README.md) contiene los pasos de uso e instalación.
-El [historial de validación](../VALIDACION.md) y las
-[pruebas de conexión de IA](../PRUEBAS_CONEXION_IA.md) conservan resultados
-fechados. Esta revisión documental no vuelve a ejecutar esas pruebas.
+El [registro de validación](../VALIDACION.md) separa resultados registrados y
+comprobaciones reproducibles. Las [pruebas de conexión de IA](../PRUEBAS_CONEXION_IA.md)
+explican el alcance del diagnóstico optativo con proveedores. Revisar estos
+documentos no equivale a volver a ejecutar sus pruebas.

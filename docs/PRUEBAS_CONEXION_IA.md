@@ -1,54 +1,41 @@
-# Pruebas reales de conexión de IA — 23 de octubre de 2026
+# Comprobación de conexiones de IA
 
-Se enviaron mensajes mínimos sin herramientas ni acceso al proyecto. No se
-modificaron los perfiles del usuario ni se instalaron o actualizaron proveedores.
+Los agentes se configuran en NexuTerm con su ejecutable o endpoint, modelo y
+credenciales correspondientes. La disponibilidad depende del proveedor, de su
+catálogo y de la autenticación de cada perfil. No se distribuyen conexiones
+personales, sesiones autenticadas ni modelos instalados como parte de la aplicación.
 
-| Proveedor/modelo | Resultado observado |
-| --- | --- |
-| Codex, perfil configurado de NexuTerm | El servidor respondió; cuenta sin sesión autenticada. No se envió inferencia. |
-| OpenCode / opencode/beam-free | Inicialización ACP y catálogo correctos. La inferencia falló: el servicio exige OpenCode >= 1.18.0; versión instalada 1.17.15. |
-| OpenCode / opencode/big-pickle | Mismo rechazo de versión al enviar el mensaje mediante ACP. |
-| Ollama / qwen2.5-coder:1.5b-base | Petición Chat Completions completada con texto no vacío mediante el cliente de NexuTerm. |
-| GitHub Copilot | Perfil configurado, pero ejecutable `copilot` ausente. No se pudo conectar. |
-| Claude Code y Gemini CLI | Ejecutables/adaptadores ausentes. No se pudo conectar. |
-| DeepSeek y otras API externas | No hay perfiles configurados para probarlas. |
+## Prueba optativa con proveedores
 
-Ollama publicó nueve modelos mediante `/v1/models`; solo se ejecutó el modelo
-pequeño indicado. El acceso al catálogo no demuestra inferencia en los demás.
-La respuesta de Ollama verifica transporte y generación, no calidad del modelo.
-
-La prueba optativa reproducible utiliza el mismo `codex::Client` del chat:
+El ejemplo `examples/check_agent_connections.rs` utiliza el cliente del chat:
 
 ```bash
 cargo run --example check_agent_connections --locked --offline --jobs 2
 ```
 
-Este comando consume una consulta mínima cuando encuentra una conexión operativa.
-No inicia sesión automáticamente. Usa un directorio de trabajo temporal y rechaza
-las solicitudes de herramientas. OpenCode utiliza un perfil temporal sin claves.
-El diagnóstico adicional ACP directo confirmó el error de versión en los dos
-modelos gratuitos anteriores, sin imprimir credenciales.
+Su alcance está fijado en el ejemplo:
 
-## Ampliación de conexiones y acceso web
+- Consulta los perfiles Codex de la configuración local de NexuTerm.
+- Prueba OpenCode con un perfil temporal y hasta dos modelos que el catálogo
+  identifique como gratuitos según los filtros del ejemplo.
+- Prueba el endpoint Ollama local `http://127.0.0.1:11434/v1` con
+  `qwen2.5-coder:1.5b-base`. Ese modelo y el servidor deben existir previamente.
 
-Se instalaron y comprobaron cinco modelos locales adicionales con respuestas de
-texto no vacías por Chat Completions: `qwen3:0.6b`, `qwen3:1.7b`,
-`llama3.2:1b`, `qwen2.5-coder:1.5b` y `tinyllama:1.1b`. Sus conexiones están
-guardadas con esos nombres exactos. Gemma 3 1B no se añadió: el registro exigió
-una versión de Ollama posterior a la instalada (0.17.4).
+El comando puede enviar consultas reales y consumir cuota del proveedor. No
+instala modelos, no inicia sesión automáticamente ni modifica los perfiles.
+Utiliza carpetas de trabajo temporales, desactiva el acceso a terminales y
+rechaza solicitudes de herramientas. `--offline` afecta a Cargo, no impide
+las conexiones de red del programa.
 
-Se instalaron Gemini CLI 0.65.0 y Copilot CLI 1.0.103 en
-`.local/ai-providers/`, excluido de Git; no se instalaron globalmente.
+El resultado distingue conexión, catálogo, texto recibido y errores. Consultar
+un catálogo no demuestra que todos sus modelos generen respuestas; recibir texto
+no mide su calidad. El ejemplo no cubre todos los proveedores configurables ni
+sustituye las pruebas de permisos, cancelación e historial del chat.
 
-- Copilot: autorización web confirmada, catálogo ACP consultado y respuesta real
-  de texto completada (`end_turn`). La cuenta anunció únicamente `auto` / `Auto`.
-  Se guardó `Auto · GitHub Copilot` con su directorio privado ya autenticado.
-  La disponibilidad gratuita depende del plan y de su cuota; no se contrató nada.
-- Google: caché OAuth recibida en el perfil privado, sin leer ni imprimir sus
-  credenciales. El proveedor rechazó después el cliente para cuentas individuales
-  con un mensaje de migración a Antigravity. No se guardó conexión Gemini bloqueada.
-- Codex se conservó intacto. No se inició ni modificó su autenticación durante
-  esta ampliación.
+## Registro de una comprobación
 
-Se guardaron en total trece perfiles: Codex, once modelos locales comprobados y
-Copilot Auto. No se añadieron conexiones que fallaron ni alias locales duplicados.
+Registra fecha, versión de NexuTerm, proveedor, modelo, resultado y alcance sin
+incluir credenciales, tokens ni historiales privados. No extrapoles resultados
+de una cuenta o fecha a todas las instalaciones. Las comprobaciones automatizadas
+y sus límites se describen en [VALIDACION.md](VALIDACION.md); la aceptación
+operativa, en [ACEPTACION.md](ACEPTACION.md).

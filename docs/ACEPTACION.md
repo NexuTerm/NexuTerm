@@ -35,31 +35,6 @@ del paquete sobre un escritorio personal. El selector nativo de exportación nec
 además comprobación manual; el editor de informe y la escritura privada sin
 sobrescritura sí se ejercitan automáticamente.
 
-## Medición del flujo de trabajo
-
-`python3 lab/check_remote_editor.py` imprime `NEXUTERM_BENCHMARK` mediante la prueba
-Rust de SSH. Mide preparación del ControlMaster, planificación y copia SFTP de una
-carpeta de 32 archivos (262144 bytes, cuatro subcarpetas), recuperación de su cola
-persistida y ejecución de la receta de disco con GNU df real. Se comprueban los
-bytes de cada archivo y que recuperar la cola completada no repite trabajos.
-
-Una ejecución local el 2 de noviembre de 2026 dio: preparación SSH 1015,897 ms,
-planificación 9,982 ms, copia 471,970 ms, recuperación de cola 7,778 ms y diagnóstico
-16 ms con retorno 0. Son observaciones de una ejecución en loopback, no un benchmark
-estadístico ni una promesa de rendimiento en redes o discos distintos. Los logs de
-cada distribución permiten contrastar sus propias medidas.
-
-Las mismas comprobaciones en contenedores nativos dieron estas medidas (ms):
-
-| Entorno | Preparación SSH | Planificación | Copia SFTP | Recuperación de cola | Diagnóstico |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Ubuntu 24.04 | 1010,441 | 9,032 | 492,227 | 10,583 | 10 |
-| Debian 13 | 1015,145 | 10,682 | 567,080 | 8,727 | 13 |
-
-En ambos casos se verificaron los 32 archivos y el diagnóstico terminó con retorno
-0. La carga y el alcance son los mismos descritos arriba; no se interpreta la
-diferencia entre ejecuciones como una comparación estadística de distribuciones.
-
 ## Comprobación pendiente con operadores y cuentas de prueba
 
 En un equipo de prueba, con datos ficticios y destinos desechables:
